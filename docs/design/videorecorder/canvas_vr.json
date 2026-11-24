@@ -1,0 +1,120 @@
+{
+ "page": {
+  "id": "vr",
+  "name": "VideoRecorder"
+ },
+ "boards": {
+  "Main.dc.html": {
+   "h": 753,
+   "is_interactive": true,
+   "title": "Дубли",
+   "w": 1264,
+   "x": 51,
+   "y": 0
+  },
+  "TakeEditor.dc.html": {
+   "h": 720,
+   "is_interactive": true,
+   "title": "Редактор дубля",
+   "w": 1280,
+   "x": 1360,
+   "y": 0
+  },
+  "Appearance.dc.html": {
+   "h": 720,
+   "is_interactive": true,
+   "title": "Внешность и ник бота",
+   "w": 1280,
+   "x": 0,
+   "y": 2520
+  },
+  "Camera.dc.html": {
+   "h": 720,
+   "is_interactive": true,
+   "title": "Кинокамера",
+   "w": 1280,
+   "x": 2720,
+   "y": 0
+  },
+  "Effects.dc.html": {
+   "h": 720,
+   "is_interactive": true,
+   "title": "Эффекты",
+   "w": 1280,
+   "x": 0,
+   "y": 840
+  },
+  "Scene.dc.html": {
+   "h": 720,
+   "is_interactive": true,
+   "title": "Сцена",
+   "w": 1280,
+   "x": 1360,
+   "y": 840
+  },
+  "Weather.dc.html": {
+   "h": 720,
+   "is_interactive": true,
+   "title": "Погода и время суток",
+   "w": 1280,
+   "x": 1360,
+   "y": 3360
+  },
+  "Options.dc.html": {
+   "h": 720,
+   "is_interactive": true,
+   "title": "Опции и бинды",
+   "w": 1280,
+   "x": 2720,
+   "y": 840
+  },
+  "Kits.dc.html": {
+   "h": 720,
+   "is_interactive": true,
+   "title": "Наборы инвентаря",
+   "w": 1280,
+   "x": 2720,
+   "y": 1680
+  },
+  "Team.dc.html": {
+   "h": 720,
+   "is_interactive": true,
+   "title": "Команда · Мотор для всех",
+   "w": 1280,
+   "x": 1360,
+   "y": 2520
+  },
+  "Invite.dc.html": {
+   "h": 720,
+   "is_interactive": true,
+   "title": "Приглашение (видит друг)",
+   "w": 1280,
+   "x": 2720,
+   "y": 2520
+  },
+  "Motor.dc.html": {
+   "h": 720,
+   "is_interactive": true,
+   "title": "Мотор: общий отсчёт",
+   "w": 1280,
+   "x": 0,
+   "y": 3360
+  },
+  "Recording.dc.html": {
+   "h": 720,
+   "is_interactive": true,
+   "title": "Запись: отсчёт",
+   "w": 1280,
+   "x": 0,
+   "y": 1680
+  },
+  "Playback.dc.html": {
+   "h": 720,
+   "is_interactive": true,
+   "title": "Просмотр сцены (панель скрыта)",
+   "w": 1280,
+   "x": 1360,
+   "y": 1680
+  }
+ }
+}

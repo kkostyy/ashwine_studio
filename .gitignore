@@ -1,0 +1,16 @@
+# сервер Rust, steamcmd и всё, что он генерирует — гигабайты и личные данные
+server/
+steamcmd/
+logs/
+plugins_backup_*/
+*.log
+
+# сторонние плагины — см. third_party/README.md
+plugins/Skinner.cs
+plugins/AdminESP.cs
+plugins/GlowingEyes.cs
+
+# локальные настройки и секреты
+.env
+*.local.*
+.claude/settings.local.json

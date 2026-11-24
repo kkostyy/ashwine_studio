@@ -1,0 +1,15 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "vr-icons",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "C:\\Users\\kosga\\AppData\\Local\\Temp\\claude\\fb4d5a480cbe5290\\0163b196-f3a8-4d36-b3c7-a77afd617073\\scratchpad\\icons\\serve.js",
+        "C:\\Users\\kosga\\AppData\\Local\\Temp\\claude\\fb4d5a480cbe5290\\0163b196-f3a8-4d36-b3c7-a77afd617073\\scratchpad\\icons",
+        "8787"
+      ],
+      "port": 8787
+    }
+  ]
+}
