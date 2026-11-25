@@ -39,7 +39,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Blueprints", "Claude", "1.2.1")]
+    [Info("Blueprints", "Claude", "1.2.2")]
     [Description("Библиотека чертежей баз с голограммой, массивами, материалами и ограничениями (на базе CopyPaste)")]
     public class Blueprints : RustPlugin
     {
@@ -1175,15 +1175,15 @@ namespace Oxide.Plugins
 
         #region Интерфейс (вино + пепел, скруглённый)
 
-        private const string ColBg = "0.07 0.065 0.065 0.97";
-        private const string ColPanel = "0.105 0.097 0.097 1";
-        private const string ColRow = "0.155 0.145 0.145 1";
-        private const string ColRowAlt = "0.13 0.12 0.12 1";
-        private const string ColBtn = "0.215 0.20 0.20 1";
-        private const string ColWine = "0.48 0.07 0.14 1";
-        private const string ColRed = "0.66 0.09 0.16 1";
-        private const string ColText = "0.93 0.90 0.89 1";
-        private const string ColDim = "0.58 0.53 0.52 1";
+        private const string ColBg = "0.071 0.055 0.055 0.97";
+        private const string ColPanel = "1 1 1 0.03";
+        private const string ColRow = "1 1 1 0.045";
+        private const string ColRowAlt = "1 1 1 0.03";
+        private const string ColBtn = "1 1 1 0.07";
+        private const string ColWine = "0.620 0.082 0.188 1";
+        private const string ColRed = "0.620 0.082 0.188 1";
+        private const string ColText = "0.937 0.914 0.906 1";
+        private const string ColDim = "0.639 0.596 0.588 1";
         private const string ColRose = "0.94 0.65 0.69 1";
         private const string Font = "robotocondensed-bold.ttf";
         private const string FontReg = "robotocondensed-regular.ttf";
@@ -1217,6 +1217,25 @@ namespace Oxide.Plugins
             }
         }
 
+        // иконки и крестик в стиле VideoRecorder (иконки берём у Hub)
+        private string HubIconPng(string n) => Hub != null && Hub.IsLoaded ? Hub.Call("GetIconPng", n) as string : null;
+
+        private void HubIcon(CuiElementContainer c, string icon, float x, float y, float s, string color)
+        {
+            var png = HubIconPng(icon);
+            if (png == null) return;
+            c.Add(new CuiElement { Parent = UiMain, Components = { new CuiRawImageComponent { Png = png, Color = color },
+                new CuiRectTransformComponent { AnchorMin = "0 1", AnchorMax = "0 1", OffsetMin = $"{x} {-y - s}", OffsetMax = $"{x + s} {-y}" } } });
+        }
+
+        private void CloseBtn(CuiElementContainer c, string cmd, float x, float y)
+        {
+            Box(c, ColBtn, x, y, 34, 34, null, UiMain, 10f);
+            bool ic = HubIconPng("close") != null;
+            if (ic) HubIcon(c, "close", x + 9, y + 9, 16, ColText);
+            Btn(c, ic ? "" : "×", cmd, "0 0 0 0", 18, x, y, 34, 34, ColText, 0f);
+        }
+
         private static void Box(CuiElementContainer c, string color, float x, float y, float w, float h, string name = null, string parent = UiMain, float r = 10f)
         {
             string omin = $"{x} {-y - h}", omax = $"{x + w} {-y}";
@@ -1247,6 +1266,12 @@ namespace Oxide.Plugins
             }, parent);
         }
 
+        private static string Nice(string t)
+        {
+            if (string.IsNullOrEmpty(t) || t.Length < 5 || t != t.ToUpperInvariant() || t == t.ToLowerInvariant()) return t;
+            return t.Substring(0, 1) + t.Substring(1).ToLowerInvariant();
+        }
+
         private static void Btn(CuiElementContainer c, string text, string cmd, string color, int size, float x, float y, float w, float h, string textColor = ColText, float r = 10f)
         {
             bool round = _roundPng != null && r > 0f;
@@ -1254,7 +1279,7 @@ namespace Oxide.Plugins
             c.Add(new CuiButton
             {
                 Button = { Command = cmd, Color = round ? "0 0 0 0" : color },
-                Text = { Text = text, FontSize = size, Align = TextAnchor.MiddleCenter, Color = textColor, Font = Font },
+                Text = { Text = Nice(text), FontSize = size, Align = TextAnchor.MiddleCenter, Color = textColor, Font = Font },
                 RectTransform = { AnchorMin = "0 1", AnchorMax = "0 1", OffsetMin = $"{x} {-y - h}", OffsetMax = $"{x + w} {-y}" }
             }, UiMain);
         }
@@ -1419,7 +1444,7 @@ namespace Oxide.Plugins
                     Parent = "Overlay",
                     Components =
                     {
-                        new RoundedImage { Png = _roundPng, Color = ColBg, Ppu = 16f / 18f },
+                        new RoundedImage { Png = _roundPng, Color = ColBg, Ppu = 16f / 22f },
                         new CuiRectTransformComponent { AnchorMin = "0.5 0.5", AnchorMax = "0.5 0.5", OffsetMin = $"{-W / 2f} {-H / 2f}", OffsetMax = $"{W / 2f} {H / 2f}" },
                         new CuiNeedsCursorComponent()
                     }
@@ -1428,8 +1453,11 @@ namespace Oxide.Plugins
                 c.Add(new CuiPanel { Image = { Color = ColBg }, RectTransform = { AnchorMin = "0.5 0.5", AnchorMax = "0.5 0.5", OffsetMin = $"{-W / 2f} {-H / 2f}", OffsetMax = $"{W / 2f} {H / 2f}" }, CursorEnabled = true }, "Overlay", UiMain);
 
             // ---- шапка как у меню стройки: вкладки ведут в BuildServer
-            Text(c, "ASH <color=#a8172a>&</color> WINE", 22, LM, 8, LSide, 28);
-            Text(c, T(id, "LibSub", ActiveBases(id)), 10, LM, 34, LSide, 16, TextAnchor.MiddleLeft, ColDim, FontReg);
+            // шапка в стиле VideoRecorder: плитка с иконкой, название, вкладки на тёмной дорожке, круглый крестик
+            Box(c, ColWine, LM, 9, 40, 40, null, UiMain, 12f);
+            HubIcon(c, "build", LM + 10, 19, 20, "1 1 1 1");
+            Text(c, "ASH <color=#f0a6b1>&</color> WINE", 17, LM + 52, 9, LSide - 52, 22, TextAnchor.MiddleLeft, ColText);
+            Text(c, T(id, "LibSub", ActiveBases(id)), 10, LM + 52, 31, LSide - 52, 16, TextAnchor.MiddleLeft, ColDim, FontReg);
             float cx = LM + LSide + 14, cw = W - cx - LM;
             bool shell = BuildServer != null && BuildServer.IsLoaded;
             if (shell)
@@ -1437,15 +1465,15 @@ namespace Oxide.Plugins
                 string[] tabs = { "tools", "library", "zones", "env", "items", "raid", "tp" };
                 string[] keys = { "TTools", "TLibrary", "TZones", "TEnv", "TItems", "TRaid", "TTp" };
                 float tw = (cw - 40 - 8 - (tabs.Length - 1) * 6) / tabs.Length;
+                Box(c, "0 0 0 0.3", cx - 4, 8, cw - 40 - 6, 44, null, UiMain, 12f);
                 for (int i = 0; i < tabs.Length; i++)
                 {
                     bool a = tabs[i] == "library";
-                    Btn(c, T(id, keys[i]), a ? "bp.ui noop" : "bs.ui tab " + tabs[i], a ? ColWine : ColPanel, 12, cx + i * (tw + 6), 12, tw, 36, a ? ColText : ColDim);
+                    Btn(c, T(id, keys[i]), a ? "bp.ui noop" : "bs.ui tab " + tabs[i], a ? ColWine : "0 0 0 0", 12, cx + i * (tw + 6), 12, tw, 36, a ? ColText : ColDim);
                 }
             }
             else Text(c, T(id, "Title"), 18, cx, 12, cw - 60, 36);
-            Btn(c, "X", "bp.ui close", ColBtn, 13, W - LM - 36, 12, 36, 36);
-            Box(c, ColWine, 0, 58, W, 2, null, UiMain, 0f);
+            CloseBtn(c, "bp.ui close", W - LM - 36, 13);
 
             // ---- левая колонка: фильтры, постановка, сохранение
             float x = LM, y = LTop, w = LSide;

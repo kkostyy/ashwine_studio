@@ -31,7 +31,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Minigames", "Claude", "1.3.2")]
+    [Info("Minigames", "Claude", "1.3.3")]
     [Description("Роум, хели-бои, Bedwars и рейд против рейда")]
     public class Minigames : RustPlugin
     {
@@ -100,15 +100,16 @@ namespace Oxide.Plugins
         private const string UiCenter = "Mg.Center";
         private const string UiToast = "Mg.Toast";
 
-        private const string ColBg = "0.07 0.065 0.065 0.97";
-        private const string ColHud = "0.07 0.065 0.065 0.86";
-        private const string ColPanel = "0.105 0.097 0.097 1";
-        private const string ColRow = "0.155 0.145 0.145 1";
-        private const string ColBtn = "0.215 0.20 0.20 1";
-        private const string ColWine = "0.48 0.07 0.14 1";
-        private const string ColWineSoft = "0.48 0.07 0.14 0.35";
-        private const string ColText = "0.93 0.90 0.89 1";
-        private const string ColDim = "0.58 0.53 0.52 1";
+        private const string ColBg = "0.071 0.055 0.055 0.97";
+        private const string ColHud = "0.071 0.055 0.055 0.86";
+        private const string ColPanel = "1 1 1 0.03";
+        private const string ColRow = "1 1 1 0.045";
+        private const string ColBtn = "1 1 1 0.07";
+        private const string ColWine = "0.620 0.082 0.188 1";
+        private const string ColWineSoft = "0.639 0.086 0.184 0.18";
+        private const string ColTab = "0 0 0 0.3";
+        private const string ColText = "0.937 0.914 0.906 1";
+        private const string ColDim = "0.639 0.596 0.588 1";
         private const string ColRose = "0.94 0.65 0.69 1";
         private const string ColGold = "0.91 0.77 0.42 1";
         private const string ColGreen = "0.50 0.83 0.60 1";
@@ -1351,15 +1352,22 @@ namespace Oxide.Plugins
             }, parent);
         }
 
+        private static string Nice(string t)
+        {
+            if (string.IsNullOrEmpty(t) || t.Length < 5 || t != t.ToUpperInvariant() || t == t.ToLowerInvariant()) return t;
+            return t.Substring(0, 1) + t.Substring(1).ToLowerInvariant();
+        }
+
         private static void Btn(CuiElementContainer c, string parent, string text, string cmd, string color, int size, float x, float y, float w, float h,
             string textColor = ColText, float r = 12f)
         {
+            if (r >= 10f) r = h <= 40f ? h / 2f : 14f;
             bool round = _roundPng != null && r > 0f;
             if (round) Box(c, parent, color, x, y, w, h, r);
             c.Add(new CuiButton
             {
                 Button = { Command = cmd, Color = round ? "0 0 0 0" : color },
-                Text = { Text = text, FontSize = size, Align = TextAnchor.MiddleCenter, Color = textColor, Font = Font },
+                Text = { Text = Nice(text), FontSize = size, Align = TextAnchor.MiddleCenter, Color = textColor, Font = Font },
                 RectTransform = { AnchorMin = "0 1", AnchorMax = "0 1", OffsetMin = $"{x} {-y - h}", OffsetMax = $"{x + w} {-y}" }
             }, parent);
         }
@@ -1376,13 +1384,34 @@ namespace Oxide.Plugins
         private void Window(CuiElementContainer c, string icon, string title, string sub, float w, float h)
         {
             c.Add(new CuiPanel { Image = { Color = "0.03 0.02 0.02 0.5" }, RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1" }, CursorEnabled = true }, "Overlay", UiMain + ".dim");
-            Root(c, UiMain, UiMain + ".dim", ColBg, "0.5 0.5", "0.5 0.5", $"{-w / 2f} {-h / 2f}", $"{w / 2f} {h / 2f}", 18f, true);
-            Box(c, UiMain, ColWine, M, M, 40, 40, 12f);
-            Text(c, UiMain, icon, 13, M, M, 40, 40, TextAnchor.MiddleCenter);
-            Text(c, UiMain, title, 18, M + 50, M - 2, w - 2 * (M + 50), 26, TextAnchor.MiddleCenter);
-            Text(c, UiMain, sub, 11, M + 50, M + 22, w - 2 * (M + 50), 18, TextAnchor.MiddleCenter, ColDim, FontReg);
-            Btn(c, UiMain, "X", "mg.ui close", ColBtn, 14, w - M - 40, M, 40, 40);
-            Box(c, UiMain, ColWine, 0, M + 52, w, 2, 0f);
+            Root(c, UiMain, UiMain + ".dim", ColBg, "0.5 0.5", "0.5 0.5", $"{-w / 2f} {-h / 2f}", $"{w / 2f} {h / 2f}", 22f, true);
+            HeadIcon(c, UiMain, icon);
+            Text(c, UiMain, Nice(title), 18, M + 52, M, w - 2 * (M + 52), 22, TextAnchor.MiddleLeft);
+            Text(c, UiMain, sub, 12, M + 52, M + 22, w - 2 * (M + 52), 16, TextAnchor.MiddleLeft, ColDim, FontReg);
+            CloseBtn(c, UiMain, "mg.ui close", w - M - 36, M + 3);
+        }
+
+        // шапка в стиле VideoRecorder: винная плитка с иконкой, круглая кнопка закрытия
+        private string IconPng(string n) { string v = null; if (string.IsNullOrEmpty(n)) return null; v = plugins.Find("Hub")?.Call("GetIconPng", n) as string; return v; }
+
+        private void HeadIcon(CuiElementContainer c, string parent, string icon)
+        {
+            Box(c, parent, ColWine, M, M + 1, 40, 40, 12f);
+            string png = (icon != null && icon.Length > 2 ? IconPng(icon) : null) ?? IconPng("mini");
+            if (png == null) { Text(c, parent, icon, 14, M, M + 1, 40, 40, TextAnchor.MiddleCenter); return; }
+            c.Add(new CuiElement { Parent = parent, Components = { new CuiRawImageComponent { Png = png, Color = "1 1 1 1" },
+                new CuiRectTransformComponent { AnchorMin = "0 1", AnchorMax = "0 1", OffsetMin = $"{M + 10} {-M - 31}", OffsetMax = $"{M + 30} {-M - 11}" } } });
+        }
+
+        private void CloseBtn(CuiElementContainer c, string parent, string cmd, float x, float y)
+        {
+            if (string.IsNullOrEmpty(cmd)) return;
+            Box(c, parent, ColBtn, x, y, 34, 34, 10f);
+            string png = IconPng("close");
+            if (png != null) c.Add(new CuiElement { Parent = parent, Components = { new CuiRawImageComponent { Png = png, Color = "0.937 0.914 0.906 1" },
+                new CuiRectTransformComponent { AnchorMin = "0 1", AnchorMax = "0 1", OffsetMin = $"{x + 9} {-y - 25}", OffsetMax = $"{x + 25} {-y - 9}" } } });
+            c.Add(new CuiButton { Button = { Command = cmd, Color = "0 0 0 0" }, Text = { Text = png == null ? "×" : "", FontSize = 18, Align = TextAnchor.MiddleCenter, Color = "0.937 0.914 0.906 1" },
+                RectTransform = { AnchorMin = "0 1", AnchorMax = "0 1", OffsetMin = $"{x} {-y - 34}", OffsetMax = $"{x + 34} {-y}" } }, parent);
         }
 
         private void DestroyWindow(BasePlayer p, string name) { CuiHelper.DestroyUi(p, name + ".dim"); CuiHelper.DestroyUi(p, name); }
@@ -1841,7 +1870,7 @@ namespace Oxide.Plugins
                 float x = M + i * (cw + G);
                 int q = _hmQueue.Where(e => e.Fmt == f).Sum(e => e.Members.Count);
                 Box(c, UiMain, a ? ColWineSoft : ColPanel, x, top, cw, 132, 16f);
-                Box(c, UiMain, "0.48 0.07 0.14 0.45", x + 14, top + 14, 44, 44, 12f);
+                Box(c, UiMain, "0.620 0.082 0.188 0.45", x + 14, top + 14, 44, 44, 12f);
                 Text(c, UiMain, HmMini(f) ? "M" : f == "a1" ? "1" : "2", 18, x + 14, top + 14, 44, 44, TextAnchor.MiddleCenter, ColRose);
                 Text(c, UiMain, T(id, "Hm_" + f), 15, x + 70, top + 14, cw - 84, 22);
                 Text(c, UiMain, T(id, "HmD_" + f), 10, x + 70, top + 36, cw - 84, 30, TextAnchor.UpperLeft, ColDim, FontReg);
@@ -1890,7 +1919,7 @@ namespace Oxide.Plugins
             for (int i = 0; i < Types.Length; i++)
             {
                 bool a = Types[i] == type;
-                Btn(c, UiMain, T(id, "Type_" + Types[i]), "mg.ui type " + Types[i], a ? ColWine : ColBtn, 12, M + i * (tw + 6), top, tw, 34, a ? ColText : ColDim, 11f);
+                Btn(c, UiMain, T(id, "Type_" + Types[i]), "mg.ui type " + Types[i], a ? ColWine : ColTab, 12, M + i * (tw + 6), top, tw, 34, a ? ColText : ColDim, 11f);
             }
             top += 34 + G;
             float ph = H - M - 48 - G - top;

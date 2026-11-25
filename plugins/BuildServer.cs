@@ -41,7 +41,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("BuildServer", "Claude", "1.3.0")]
+    [Info("BuildServer", "Claude", "1.3.1")]
     [Description("Набор функций билд/креатив-сервера: полёт, предметы, стройка, рейд-тест, участки, телепорты")]
     public class BuildServer : RustPlugin
     {
@@ -2051,7 +2051,7 @@ namespace Oxide.Plugins
                 iy += 38;
                 if (here.Owner == id)
                 {
-                    Box(c, here.Pvp ? "0.66 0.09 0.16 0.35" : ColRow, x + 14, iy, curW - 28, 28, null, UiMain, 8f);
+                    Box(c, here.Pvp ? "0.620 0.082 0.188 0.35" : ColRow, x + 14, iy, curW - 28, 28, null, UiMain, 8f);
                     Text(c, T(id, "PlotPvp"), 11, x + 24, iy, curW - 120, 28);
                     Pill(c, id, here.Pvp, "bs.ui plot.pvp", x + curW - 14 - 78, iy + 4);
                     iy += 34;
@@ -3078,15 +3078,15 @@ namespace Oxide.Plugins
             return s;
         }
 
-        private const string ColBg = "0.07 0.065 0.065 0.97";
-        private const string ColPanel = "0.105 0.097 0.097 1";
-        private const string ColRow = "0.155 0.145 0.145 1";
-        private const string ColRowAlt = "0.13 0.12 0.12 1";
-        private const string ColBtn = "0.215 0.20 0.20 1";
-        private const string ColWine = "0.48 0.07 0.14 1";
-        private const string ColRed = "0.66 0.09 0.16 1";
-        private const string ColText = "0.93 0.90 0.89 1";
-        private const string ColDim = "0.58 0.53 0.52 1";
+        private const string ColBg = "0.071 0.055 0.055 0.97";
+        private const string ColPanel = "1 1 1 0.03";
+        private const string ColRow = "1 1 1 0.045";
+        private const string ColRowAlt = "1 1 1 0.03";
+        private const string ColBtn = "1 1 1 0.07";
+        private const string ColWine = "0.620 0.082 0.188 1";
+        private const string ColRed = "0.620 0.082 0.188 1";
+        private const string ColText = "0.937 0.914 0.906 1";
+        private const string ColDim = "0.639 0.596 0.588 1";
         private const string ColRose = "0.94 0.65 0.69 1";
         private const string Font = "robotocondensed-bold.ttf";
         private const string FontReg = "robotocondensed-regular.ttf";
@@ -3111,6 +3111,25 @@ namespace Oxide.Plugins
             if (!_config.RoundedCorners) return;
             try { _roundPng = FileStorage.server.StoreByCrc(CommunityEntity.ServerInstance.net.ID, FileStorage.Type.png, Convert.FromBase64String(RoundPngB64)).ToString(); }
             catch (Exception ex) { PrintWarning("Rounded UI disabled: " + ex.Message); }
+        }
+
+        // иконки и крестик в стиле VideoRecorder (иконки берём у Hub)
+        private string HubIconPng(string n) => Hub != null && Hub.IsLoaded ? Hub.Call("GetIconPng", n) as string : null;
+
+        private void HubIcon(CuiElementContainer c, string icon, float x, float y, float s, string color)
+        {
+            var png = HubIconPng(icon);
+            if (png == null) return;
+            c.Add(new CuiElement { Parent = UiMain, Components = { new CuiRawImageComponent { Png = png, Color = color },
+                new CuiRectTransformComponent { AnchorMin = "0 1", AnchorMax = "0 1", OffsetMin = $"{x} {-y - s}", OffsetMax = $"{x + s} {-y}" } } });
+        }
+
+        private void CloseBtn(CuiElementContainer c, string cmd, float x, float y)
+        {
+            Box(c, ColBtn, x, y, 34, 34, null, UiMain, 10f);
+            bool ic = HubIconPng("close") != null;
+            if (ic) HubIcon(c, "close", x + 9, y + 9, 16, ColText);
+            Btn(c, ic ? "" : "×", cmd, "0 0 0 0", 18, x, y, 34, 34, ColText, 0f);
         }
 
         private static void Box(CuiElementContainer c, string color, float x, float y, float w, float h, string name = null, string parent = UiMain, float r = 10f)
@@ -3143,15 +3162,22 @@ namespace Oxide.Plugins
             }, parent);
         }
 
+        private static string Nice(string t)
+        {
+            if (string.IsNullOrEmpty(t) || t.Length < 5 || t != t.ToUpperInvariant() || t == t.ToLowerInvariant()) return t;
+            return t.Substring(0, 1) + t.Substring(1).ToLowerInvariant();
+        }
+
         private static void Btn(CuiElementContainer c, string text, string cmd, string color, int size, float x, float y, float w, float h,
             string textColor = ColText, float r = 10f, string parent = UiMain)
         {
+            if (r >= 10f) r = h <= 40f ? h / 2f : 14f;
             bool round = _roundPng != null && r > 0f;
             if (round) Box(c, color, x, y, w, h, null, parent, r);
             c.Add(new CuiButton
             {
                 Button = { Command = cmd, Color = round ? "0 0 0 0" : color },
-                Text = { Text = text, FontSize = size, Align = TextAnchor.MiddleCenter, Color = textColor, Font = Font },
+                Text = { Text = Nice(text), FontSize = size, Align = TextAnchor.MiddleCenter, Color = textColor, Font = Font },
                 RectTransform = { AnchorMin = "0 1", AnchorMax = "0 1", OffsetMin = $"{x} {-y - h}", OffsetMax = $"{x + w} {-y}" }
             }, parent);
         }
@@ -3211,7 +3237,7 @@ namespace Oxide.Plugins
                     Parent = "Overlay",
                     Components =
                     {
-                        new RoundedImage { Png = _roundPng, Color = ColBg, Ppu = 16f / 18f },
+                        new RoundedImage { Png = _roundPng, Color = ColBg, Ppu = 16f / 22f },
                         new CuiRectTransformComponent { AnchorMin = "0.5 0.5", AnchorMax = "0.5 0.5", OffsetMin = $"{-W / 2f} {-H / 2f}", OffsetMax = $"{W / 2f} {H / 2f}" },
                         new CuiNeedsCursorComponent()
                     }
@@ -3220,17 +3246,20 @@ namespace Oxide.Plugins
                 c.Add(new CuiPanel { Image = { Color = ColBg }, RectTransform = { AnchorMin = "0.5 0.5", AnchorMax = "0.5 0.5", OffsetMin = $"{-W / 2f} {-H / 2f}", OffsetMax = $"{W / 2f} {H / 2f}" }, CursorEnabled = true }, "Overlay", UiMain);
 
             // шапка: лого над боковой колонкой, вкладки над контентом, крестик
-            Text(c, "ASH <color=#a8172a>&</color> WINE", 22, M, 8, SideW, 28, TextAnchor.MiddleLeft, ColText);
-            Text(c, T(id, "Sub"), 10, M, 34, SideW, 16, TextAnchor.MiddleLeft, ColDim, FontReg);
+            // шапка в стиле VideoRecorder: плитка с иконкой, название, вкладки на тёмной дорожке, круглый крестик
+            Box(c, ColWine, M, 9, 40, 40, null, UiMain, 12f);
+            HubIcon(c, "build", M + 10, 19, 20, "1 1 1 1");
+            Text(c, "ASH <color=#f0a6b1>&</color> WINE", 17, M + 52, 9, SideW - 52, 22, TextAnchor.MiddleLeft, ColText);
+            Text(c, T(id, "Sub"), 10, M + 52, 31, SideW - 52, 16, TextAnchor.MiddleLeft, ColDim, FontReg);
             float cx = M + SideW + G2, cw = W - cx - M;
             float tw = (cw - 40 - G - (Tabs.Length - 1) * 6) / Tabs.Length;
+            Box(c, "0 0 0 0.3", cx - 4, 8, cw - 40 - 6, 44, null, UiMain, 12f);
             for (int i = 0; i < Tabs.Length; i++)
             {
                 bool a = ui.Tab == Tabs[i];
-                Btn(c, T(id, TabKeys[i]), "bs.ui tab " + Tabs[i], a ? ColWine : ColPanel, 12, cx + i * (tw + 6), 12, tw, 36, a ? ColText : ColDim, 10f);
+                Btn(c, T(id, TabKeys[i]), "bs.ui tab " + Tabs[i], a ? ColWine : "0 0 0 0", 12, cx + i * (tw + 6), 12, tw, 36, a ? ColText : ColDim, 10f);
             }
-            Btn(c, "X", "bs.ui close", ColBtn, 13, W - M - 36, 12, 36, 36);
-            Box(c, ColWine, 0, 58, W, 2, null, UiMain, 0f);
+            CloseBtn(c, "bs.ui close", W - M - 36, 13);
 
             if (ui.Tab == "tools") BuildToolsSide(c, player, M, Top, SideW);
             else BuildInfoSide(c, player, M, Top, SideW);
@@ -3621,7 +3650,7 @@ namespace Oxide.Plugins
             RaidTest test;
             bool active = _raidTests.TryGetValue(id, out test);
 
-            Box(c, "0.66 0.09 0.16 0.18", x, y, w, 70, null, UiMain, 14f);
+            Box(c, "0.620 0.082 0.188 0.18", x, y, w, 70, null, UiMain, 14f);
             Text(c, T(id, "RaidTitle"), 15, x + 16, y + 6, w - 32, 22, TextAnchor.MiddleCenter);
             Text(c, T(id, "RaidHint2"), 10, x + 16, y + 30, w - 32, 36, TextAnchor.UpperCenter, ColDim, FontReg);
             y += 70 + G;

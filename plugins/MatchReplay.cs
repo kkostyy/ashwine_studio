@@ -11,7 +11,7 @@ namespace Oxide.Plugins
 {
     // Запись матчей ранкеда и дуэлей: позиции игроков 5 раз в секунду, выстрелы, смерти.
     // Просмотр — только для смотрящего (ddraw), без ботов на сервере: арена может быть занята.
-    [Info("MatchReplay", "Claude", "1.0.0")]
+    [Info("MatchReplay", "Claude", "1.1.0")]
     [Description("Records ranked/arena matches and plays them back privately for the viewer")]
     public class MatchReplay : RustPlugin
     {
@@ -224,36 +224,45 @@ namespace Oxide.Plugins
 
         #region Интерфейс
 
-        private const string ColGlass = "0.07 0.04 0.05 0.94", ColPanel = "1 1 1 0.05", ColWine = "0.639 0.086 0.184 1", ColText = "0.95 0.92 0.92 1",
-            ColDim = "0.66 0.6 0.62 1", ColPink = "0.94 0.65 0.69 1", ColRed = "0.88 0.34 0.42 1", ColBlue = "0.45 0.62 0.95 1";
+        private const string ColRed = "0.88 0.34 0.42 1", ColBlue = "0.45 0.62 0.95 1";
 
         private static string Mmss(float s) => $"{(int)s / 60}:{(int)s % 60:00}";
 
         private void OpenList(BasePlayer player, bool mineOnly)
         {
+            VInit();
             var id = Id(player);
-            var list = _index.List.Where(m => !mineOnly || m.Ids.Contains(id)).Take(9).ToList();
+            var list = _index.List.Where(m => !mineOnly || m.Ids.Contains(id)).Take(8).ToList();
             const float W = 720f, H = 560f;
             var c = new CuiElementContainer();
-            c.Add(new CuiPanel { Image = { Color = "0 0 0 0.55" }, RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1" }, CursorEnabled = true }, "Overlay", UiList);
+            c.Add(new CuiPanel { Image = { Color = "0.03 0.02 0.02 0.5" }, RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1" }, CursorEnabled = true }, "Overlay", UiList);
             string w = UiList + ".w";
-            c.Add(new CuiPanel { Image = { Color = ColGlass }, RectTransform = { AnchorMin = "0.5 0.5", AnchorMax = "0.5 0.5", OffsetMin = $"{-W / 2} {-H / 2}", OffsetMax = $"{W / 2} {H / 2}" } }, UiList, w);
-            Box(c, w, ColWine, 0, 0, W, 4);
-            Txt(c, w, T(id, "Title"), 18, 20, 16, 300, 26, TextAnchor.MiddleLeft, ColText, true);
-            Txt(c, w, T(id, "Sub"), 11, 20, 42, W - 260, 16, TextAnchor.MiddleLeft, ColDim, false);
-            Btn(c, w, T(id, mineOnly ? "All" : "Mine"), "replay.ui list " + (mineOnly ? "all" : "mine"), "1 1 1 0.07", W - 210, 18, 150, 32, 11, ColText);
-            Btn(c, w, "×", "replay.ui close", "1 1 1 0.06", W - 52, 18, 32, 32, 15, ColText);
-            float y = 76;
-            if (list.Count == 0) Txt(c, w, T(id, "Empty"), 12, 20, y, W - 40, 50, TextAnchor.UpperLeft, ColDim, false);
+            VRoot(c, w, UiList, VGlass, "0.5 0.5", "0.5 0.5", $"{-W / 2} {-H / 2}", $"{W / 2} {H / 2}", 22f, true);
+            VHead(c, w, "play", "▶", T(id, "Title"), T(id, "Sub"), W, "replay.ui close");
+            // фильтр: дорожка «Все / Мои»
+            VBox(c, w, VDark, 17, 73, W - 34, 42, 12f);
+            float tw = (W - 34 - 8 - 4) / 2f;
+            for (int i = 0; i < 2; i++)
+            {
+                bool a = (i == 1) == mineOnly;
+                if (a) VBox(c, w, VAcc, 21 + i * (tw + 4), 77, tw, 34, 9f);
+                VTx(c, w, VNice(T(id, i == 0 ? "All" : "Mine")), 12, 21 + i * (tw + 4), 77, tw, 34, TextAnchor.MiddleCenter, a ? "1 1 1 1" : VDim);
+                VHit(c, w, "replay.ui list " + (i == 0 ? "all" : "mine"), 21 + i * (tw + 4), 77, tw, 34);
+            }
+            float y = 127;
+            VTx(c, w, T(id, "Count", list.Count).ToUpper(), 11, 17, y, 300, 20, TextAnchor.MiddleLeft, VDim, false);
+            y += 26;
+            if (list.Count == 0) VTx(c, w, T(id, "Empty"), 12, 17, y, W - 34, 60, TextAnchor.UpperLeft, VDim, false);
             foreach (var m in list)
             {
-                Box(c, w, ColPanel, 20, y, W - 40, 46);
-                Txt(c, w, m.Title, 13, 34, y + 4, 300, 20, TextAnchor.MiddleLeft, ColText, true);
-                Txt(c, w, string.Join(", ", m.Names.Take(6)) + (m.Names.Count > 6 ? "…" : ""), 10, 34, y + 24, 380, 16, TextAnchor.MiddleLeft, ColDim, false);
-                Txt(c, w, m.Result ?? "", 14, 340, y, 90, 46, TextAnchor.MiddleCenter, ColPink, true);
-                Txt(c, w, m.Date + " · " + Mmss(m.Dur), 10, 430, y, 120, 46, TextAnchor.MiddleLeft, ColDim, false);
-                Btn(c, w, T(id, "Watch"), "replay.ui watch " + m.Id, ColWine, W - 150, y + 8, 116, 30, 12, ColText);
-                y += 52;
+                VBBox(c, w, VSurf, VLine, 17, y, W - 34, 44, 12f);
+                VIc(c, w, m.Title.StartsWith("Ранкед") || m.Title.StartsWith("Ranked") ? "cup" : "arena", 31, y + 14, 16, VRose);
+                VTx(c, w, m.Title, 13, 57, y + 4, 280, 20);
+                VTx(c, w, string.Join(", ", m.Names.Take(6)) + (m.Names.Count > 6 ? "…" : ""), 10, 57, y + 23, 300, 16, TextAnchor.MiddleLeft, VDim, false);
+                VTx(c, w, m.Result ?? "", 15, 360, y, 70, 44, TextAnchor.MiddleCenter, VRose);
+                VTx(c, w, m.Date + " · " + Mmss(m.Dur), 11, 440, y, 130, 44, TextAnchor.MiddleLeft, VDim, false);
+                VPBtn(c, w, T(id, "Watch"), "replay.ui watch " + m.Id, "primary", W - 147, y + 7, 116, 30, 12);
+                y += 50;
             }
             CuiHelper.DestroyUi(player, UiList);
             CuiHelper.AddUi(player, c);
@@ -261,40 +270,46 @@ namespace Oxide.Plugins
 
         private void DrawBar(BasePlayer player, View v)
         {
+            VInit();
             var id = Id(player);
-            const float W = 620f, H = 96f;
+            const float W = 640f, H = 112f;
             var c = new CuiElementContainer();
-            c.Add(new CuiPanel { Image = { Color = ColGlass }, RectTransform = { AnchorMin = "0.5 0", AnchorMax = "0.5 0", OffsetMin = $"{-W / 2} 110", OffsetMax = $"{W / 2} {110 + H}" }, CursorEnabled = true }, "Hud", UiBar);
-            Box(c, UiBar, ColWine, 0, 0, 4, H);
-            Txt(c, UiBar, T(id, "Rec").ToUpper() + " · " + v.R.Title, 10, 16, 8, W - 200, 14, TextAnchor.MiddleLeft, ColPink, false);
-            Txt(c, UiBar, Mmss(v.T) + " / " + Mmss(v.R.Dur) + "   ×" + v.Speed.ToString("0.#", CultureInfo.InvariantCulture), 12, W - 200, 6, 184, 18, TextAnchor.MiddleRight, ColText, true);
+            VRoot(c, UiBar, "Hud", VGlass, "0.5 0", "0.5 0", $"{-W / 2} 100", $"{W / 2} {100 + H}", 22f, true);
+            // строка: точка-статус, название, время
+            VBox(c, UiBar, v.Paused ? "0.75 0.72 0.71 1" : "0.831 0.122 0.235 1", 20, 21, 10, 10, 5f);
+            VTx(c, UiBar, (v.Paused ? T(id, "Pause") : T(id, "Rec")).ToUpper(), 12, 38, 14, 90, 24, TextAnchor.MiddleLeft, VRose);
+            VTx(c, UiBar, v.R.Title, 12, 128, 14, W - 340, 24, TextAnchor.MiddleLeft, VDim, false);
+            VTx(c, UiBar, Mmss(v.T) + " / " + Mmss(v.R.Dur), 14, W - 200, 14, 180, 24, TextAnchor.MiddleRight, VText);
             // полоса времени + смерти
-            Box(c, UiBar, "1 1 1 0.08", 16, 30, W - 32, 6);
-            Box(c, UiBar, ColWine, 16, 30, (W - 32) * Mathf.Clamp01(v.T / Mathf.Max(1f, v.R.Dur)), 6);
+            VBox(c, UiBar, "1 1 1 0.14", 20, 44, W - 40, 6, 3f);
+            VBox(c, UiBar, "0.831 0.122 0.235 1", 20, 44, Mathf.Max(6f, (W - 40) * Mathf.Clamp01(v.T / Mathf.Max(1f, v.R.Dur))), 6, 3f);
             foreach (var e in v.R.E.Where(e => e.K == "death"))
             {
                 var tr = v.R.P.FirstOrDefault(p => p.Id == e.A);
-                Box(c, UiBar, tr != null && tr.Team == 0 ? ColRed : ColBlue, 16 + (W - 32) * e.T / Mathf.Max(1f, v.R.Dur) - 1.5f, 26, 3, 14);
+                VBox(c, UiBar, tr != null && tr.Team == 0 ? ColRed : ColBlue, 20 + (W - 40) * e.T / Mathf.Max(1f, v.R.Dur) - 2f, 40, 4, 14, 2f);
             }
-            string[][] btns =
+            // кнопки: ⟲10 · play · 10⟳ | скорость | выход
+            float y = 64;
+            VPBtn(c, UiBar, "−10", "replay.ui seek -10", "ghost", 20, y, 52, 36, 12);
+            VBox(c, UiBar, VAcc, 80, y - 2, 40, 40, 20f);
+            VIc(c, UiBar, v.Paused ? "play" : "stop", 90, y + 8, 20, "1 1 1 1");
+            if (VIconPng("play") == null) VTx(c, UiBar, v.Paused ? "▶" : "II", 14, 80, y - 2, 40, 40, TextAnchor.MiddleCenter);
+            VHit(c, UiBar, "replay.ui pause", 80, y - 2, 40, 40);
+            VPBtn(c, UiBar, "+10", "replay.ui seek 10", "ghost", 128, y, 52, 36, 12);
+            VBox(c, UiBar, "1 1 1 0.1", 194, y + 6, 1, 24, 0f);
+            string[] sp = { "0.5", "1", "2" };
+            VBox(c, UiBar, VDark, 208, y, 174, 36, 18f);
+            for (int i = 0; i < 3; i++)
             {
-                new[] { "−10", "replay.ui seek -10" }, new[] { v.Paused ? T(id, "Play") : T(id, "Pause"), "replay.ui pause" }, new[] { "+10", "replay.ui seek 10" },
-                new[] { "×0.5", "replay.ui speed 0.5" }, new[] { "×1", "replay.ui speed 1" }, new[] { "×2", "replay.ui speed 2" }, new[] { T(id, "Exit"), "replay.ui stop" },
-            };
-            float bw = (W - 32 - 6 * 6) / 7f;
-            for (int i = 0; i < btns.Length; i++)
-                Btn(c, UiBar, btns[i][0], btns[i][1], i == 1 ? ColWine : i == 6 ? "1 1 1 0.08" : ColPanel, 16 + i * (bw + 6), 50, bw, 32, 12, ColText);
+                bool a = Mathf.Abs(v.Speed - float.Parse(sp[i], CultureInfo.InvariantCulture)) < 0.01f;
+                if (a) VBox(c, UiBar, VAcc, 212 + i * 56, y + 4, 54, 28, 14f);
+                VTx(c, UiBar, "×" + sp[i], 12, 212 + i * 56, y + 4, 54, 28, TextAnchor.MiddleCenter, a ? "1 1 1 1" : VDim);
+                VHit(c, UiBar, "replay.ui speed " + sp[i], 212 + i * 56, y + 4, 54, 28);
+            }
+            VPBtn(c, UiBar, T(id, "Exit"), "replay.ui stop", "soft", W - 140, y, 120, 36, 12);
             CuiHelper.DestroyUi(player, UiBar);
             CuiHelper.AddUi(player, c);
         }
-
-        private static string[] O(float x, float y, float w, float h) => new[] { $"{x} {-y - h}", $"{x + w} {-y}" };
-        private static void Box(CuiElementContainer c, string p, string col, float x, float y, float w, float h)
-        { var o = O(x, y, w, h); c.Add(new CuiPanel { Image = { Color = col }, RectTransform = { AnchorMin = "0 1", AnchorMax = "0 1", OffsetMin = o[0], OffsetMax = o[1] } }, p); }
-        private static void Txt(CuiElementContainer c, string p, string t, int s, float x, float y, float w, float h, TextAnchor a, string col, bool bold)
-        { var o = O(x, y, w, h); c.Add(new CuiLabel { Text = { Text = t, FontSize = s, Align = a, Color = col, Font = bold ? "robotocondensed-bold.ttf" : "robotocondensed-regular.ttf" }, RectTransform = { AnchorMin = "0 1", AnchorMax = "0 1", OffsetMin = o[0], OffsetMax = o[1] } }, p); }
-        private static void Btn(CuiElementContainer c, string p, string t, string cmd, string col, float x, float y, float w, float h, int s, string tc)
-        { var o = O(x, y, w, h); c.Add(new CuiButton { Button = { Command = cmd, Color = col }, Text = { Text = t, FontSize = s, Align = TextAnchor.MiddleCenter, Color = tc, Font = "robotocondensed-regular.ttf" }, RectTransform = { AnchorMin = "0 1", AnchorMax = "0 1", OffsetMin = o[0], OffsetMax = o[1] } }, p); }
 
         #endregion
 
@@ -325,13 +340,13 @@ namespace Oxide.Plugins
         {
             lang.RegisterMessages(new Dictionary<string, string>
             {
-                ["Title"] = "ЗАПИСИ МАТЧЕЙ", ["Sub"] = "Ранкед и дуэли записываются сами. Просмотр видишь только ты.", ["Mine"] = "ТОЛЬКО МОИ", ["All"] = "ВСЕ ЗАПИСИ",
+                ["Count"] = "Записей: {0}", ["Title"] = "Записи матчей", ["Sub"] = "Ранкед и дуэли записываются сами. Просмотр видишь только ты.", ["Mine"] = "ТОЛЬКО МОИ", ["All"] = "ВСЕ ЗАПИСИ",
                 ["Empty"] = "Пока нет записей. Сыграй ранкед или дуэль — запись появится здесь.", ["Watch"] = "СМОТРЕТЬ",
                 ["Rec"] = "Повтор", ["Play"] = "▶ ИГРАТЬ", ["Pause"] = "ПАУЗА", ["Exit"] = "ВЫЙТИ", ["Missing"] = "Запись не найдена",
             }, this, "ru");
             lang.RegisterMessages(new Dictionary<string, string>
             {
-                ["Title"] = "MATCH REPLAYS", ["Sub"] = "Ranked and duels are recorded automatically. Only you see the playback.", ["Mine"] = "MINE ONLY", ["All"] = "ALL",
+                ["Count"] = "Replays: {0}", ["Title"] = "Match replays", ["Sub"] = "Ranked and duels are recorded automatically. Only you see the playback.", ["Mine"] = "MINE ONLY", ["All"] = "ALL",
                 ["Empty"] = "No replays yet. Play ranked or a duel.", ["Watch"] = "WATCH",
                 ["Rec"] = "Replay", ["Play"] = "▶ PLAY", ["Pause"] = "PAUSE", ["Exit"] = "EXIT", ["Missing"] = "Replay not found",
             }, this);
@@ -339,6 +354,120 @@ namespace Oxide.Plugins
 
         private string T(ulong id, string key, params object[] a) { var s = lang.GetMessage(key, this, id.ToString()); return a.Length > 0 ? string.Format(s, a) : s; }
         private void Msg(BasePlayer p, string key) => SendReply(p, "<color=#f0a6b0>Replay</color> " + T(Id(p), key));
+
+        #endregion
+    
+        #region Стиль VideoRecorder (общий для окон)
+
+        private static string _vRound;
+        private const string VRoundB64 = "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAACgklEQVR42u2bMWsUQRiGn5k7sbNKEBGxsUnAJo0BQVJohHTW/gWr9Km0Su1fsAkEa2MnHGiTRjgLbeQ4gpDGK5LC3f0s9p1ks7kLdmZ3vg+W290Zjnmf+WZnBuYNZsaCCMAAKPR8G3gOPAPWgLvALdX7n2HADJgCh8BH4APwS+VDoFS9yyIXAIhApfsV4BXwArhDN+IIeA+8Bb7N0dTAZ9a+BvodmtlrMzux8yjNrDCzStd1idSeQm1McSINw5a2s6udAQOly33gHfBY7wuVhY5kgEnHUM8j4CXws6Hx0hBIBavAgcb4H/1JV4TPA1EAN/SN2ATGTQgJQBof94AvGutFg2DXI2k5Ah4Bk6Q5qneDKO31UHyaCQpp25PWAIQoEiWwA6w30r5vMZS2dWktgRjMLAAPgK+qFDs85v/lm1ApGx4CP6JebgM3dd9X8WlxZ9K6DVgwsyV9GZcalfocado7BlYjsAUsZ9D77SxYBrai5kZbtFbucRYYsBm1sQmZ9H4zCwKwFszst3Z1lhGEpHUW7Ir9cA4RyTwcgANwAA7AATgAB+AAHIADcAAOwAE4AAfgAByAA3AADsABOAAH4AAcgANwAA7AATgAB5AHgBkXj4+RyREZgFmkPkWdK4BppLaZ5HpM7jBSewNyPSZ34EdldbMv4WUGvV9K6z5w7MflJfg7sMtFn2AfI5m/dqX5zDCRQHyidlQUPXSNJE2fgSfKhMpNU6pQKTUmwFMtjpLHxjo+5pMHaiptE2mt2nuBUgVjasPkiHN3VdExEMkvmNxwI2kat42Tcc4UMaB2WG4Ab4DThnmyahiR7Rqu7Eq1MajNp9KwMc816ubpKwBkY5//C56fx7Wog3HqAAAAAElFTkSuQmCC";
+        private const string VGlass = "0.071 0.055 0.055 0.94", VSurf = "1 1 1 0.045", VLine = "1 1 1 0.08", VAcc = "0.620 0.082 0.188 1",
+            VSoft = "0.639 0.086 0.184 0.18", VSoftLine = "0.941 0.651 0.694 0.25", VText = "0.937 0.914 0.906 1", VDim = "0.639 0.596 0.588 1",
+            VRose = "0.941 0.651 0.694 1", VDark = "0 0 0 0.3", VGold = "0.851 0.737 0.514 1", VGreen = "0.498 0.831 0.604 1";
+
+        private class VRoundImg : ICuiComponent
+        {
+            [Newtonsoft.Json.JsonProperty("type")] public string Type => "UnityEngine.UI.Image";
+            [Newtonsoft.Json.JsonProperty("png")] public string Png;
+            [Newtonsoft.Json.JsonProperty("color")] public string Color;
+            [Newtonsoft.Json.JsonProperty("imagetype")] public string ImageType = "Sliced";
+            [Newtonsoft.Json.JsonProperty("slice")] public string Slice = "16 16 16 16";
+            [Newtonsoft.Json.JsonProperty("ppuMultiplier")] public float Ppu = 1f;
+        }
+
+        private static void VInit()
+        {
+            if (_vRound != null) return;
+            try { _vRound = FileStorage.server.StoreByCrc(CommunityEntity.ServerInstance.net.ID, FileStorage.Type.png, Convert.FromBase64String(VRoundB64)).ToString(); }
+            catch { _vRound = null; }
+        }
+
+        private static string VMin(float x, float y, float h) => $"{x} {-y - h}";
+        private static string VMax(float x, float y, float w) => $"{x + w} {-y}";
+
+        // окно/панель со скруглением по якорям
+        private static void VRoot(CuiElementContainer c, string name, string parent, string color, string amin, string amax, string omin, string omax, float r, bool cursor)
+        {
+            var e = new CuiElement { Name = name, Parent = parent };
+            if (_vRound != null && r > 0f) e.Components.Add(new VRoundImg { Png = _vRound, Color = color, Ppu = 16f / r });
+            else e.Components.Add(new CuiImageComponent { Color = color });
+            e.Components.Add(new CuiRectTransformComponent { AnchorMin = amin, AnchorMax = amax, OffsetMin = omin, OffsetMax = omax });
+            if (cursor) e.Components.Add(new CuiNeedsCursorComponent());
+            c.Add(e);
+        }
+
+        private static void VBox(CuiElementContainer c, string parent, string color, float x, float y, float w, float h, float r = 12f)
+        {
+            r = Mathf.Min(r, Mathf.Min(w, h) / 2f);
+            if (_vRound != null && r > 0.5f)
+                c.Add(new CuiElement { Parent = parent, Components = { new VRoundImg { Png = _vRound, Color = color, Ppu = 16f / r }, new CuiRectTransformComponent { AnchorMin = "0 1", AnchorMax = "0 1", OffsetMin = VMin(x, y, h), OffsetMax = VMax(x, y, w) } } });
+            else c.Add(new CuiPanel { Image = { Color = color }, RectTransform = { AnchorMin = "0 1", AnchorMax = "0 1", OffsetMin = VMin(x, y, h), OffsetMax = VMax(x, y, w) } }, parent);
+        }
+
+        private static void VBBox(CuiElementContainer c, string parent, string bg, string line, float x, float y, float w, float h, float r)
+        {
+            VBox(c, parent, line, x, y, w, h, r);
+            VBox(c, parent, "0.071 0.055 0.055 0.96", x + 1, y + 1, w - 2, h - 2, Mathf.Max(0f, r - 1));
+            VBox(c, parent, bg, x + 1, y + 1, w - 2, h - 2, Mathf.Max(0f, r - 1));
+        }
+
+        private static void VTx(CuiElementContainer c, string parent, string text, int size, float x, float y, float w, float h,
+            TextAnchor align = TextAnchor.MiddleLeft, string color = VText, bool bold = true)
+        {
+            c.Add(new CuiLabel { Text = { Text = text ?? "", FontSize = size, Align = align, Color = color, Font = bold ? "robotocondensed-bold.ttf" : "robotocondensed-regular.ttf" },
+                RectTransform = { AnchorMin = "0 1", AnchorMax = "0 1", OffsetMin = VMin(x, y, h), OffsetMax = VMax(x, y, w) } }, parent);
+        }
+
+        private static void VHit(CuiElementContainer c, string parent, string cmd, float x, float y, float w, float h)
+        {
+            if (string.IsNullOrEmpty(cmd)) return;
+            c.Add(new CuiButton { Button = { Command = cmd, Color = "0 0 0 0" }, Text = { Text = "" }, RectTransform = { AnchorMin = "0 1", AnchorMax = "0 1", OffsetMin = VMin(x, y, h), OffsetMax = VMax(x, y, w) } }, parent);
+        }
+
+        private string VIconPng(string n) => plugins.Find("Hub")?.Call("GetIconPng", n) as string;
+
+        private void VIc(CuiElementContainer c, string parent, string icon, float x, float y, float s, string color = VText)
+        {
+            var png = VIconPng(icon);
+            if (png == null) return;
+            c.Add(new CuiElement { Parent = parent, Components = { new CuiRawImageComponent { Png = png, Color = color }, new CuiRectTransformComponent { AnchorMin = "0 1", AnchorMax = "0 1", OffsetMin = VMin(x, y, s), OffsetMax = VMax(x, y, s) } } });
+        }
+
+        // кнопка-иконка 34×34 (как в VideoRecorder); без иконки — символ
+        private void VIBtn(CuiElementContainer c, string parent, string icon, string fallback, string cmd, float x, float y, float s = 34f)
+        {
+            VBox(c, parent, VSurf, x, y, s, s, 10f);
+            if (VIconPng(icon) != null) VIc(c, parent, icon, x + (s - 16f) / 2f, y + (s - 16f) / 2f, 16f);
+            else VTx(c, parent, fallback, 16, x, y, s, s, TextAnchor.MiddleCenter);
+            VHit(c, parent, cmd, x, y, s, s);
+        }
+
+        private static string VNice(string t)
+        {
+            if (string.IsNullOrEmpty(t) || t.Length < 5 || t != t.ToUpperInvariant() || t == t.ToLowerInvariant()) return t;
+            return t.Substring(0, 1) + t.Substring(1).ToLowerInvariant();
+        }
+
+        // кнопка с подписью: primary / ghost / soft / dark
+        private static void VPBtn(CuiElementContainer c, string parent, string text, string cmd, string kind, float x, float y, float w, float h, int fs = 12)
+        {
+            float r = h <= 40 ? h / 2f : 14f;
+            if (kind == "soft") VBBox(c, parent, VSoft, VSoftLine, x, y, w, h, r);
+            else VBox(c, parent, kind == "primary" ? VAcc : kind == "dark" ? VDark : VSurf, x, y, w, h, r);
+            VTx(c, parent, VNice(text), fs, x, y, w, h, TextAnchor.MiddleCenter, kind == "soft" ? VRose : kind == "dark" ? VDim : VText);
+            VHit(c, parent, cmd, x, y, w, h);
+        }
+
+        // шапка окна: винная плитка с иконкой, заголовок, подзаголовок, круглая кнопка закрытия
+        private void VHead(CuiElementContainer c, string parent, string icon, string letter, string title, string sub, float w, string closeCmd)
+        {
+            VBox(c, parent, VAcc, 17, 19, 40, 40, 12f);
+            if (VIconPng(icon) != null) VIc(c, parent, icon, 27, 29, 20, "1 1 1 1");
+            else VTx(c, parent, letter, 15, 17, 19, 40, 40, TextAnchor.MiddleCenter);
+            VTx(c, parent, title, 18, 69, 20, w - 69 - 60, 22);
+            VTx(c, parent, sub, 12, 69, 42, w - 69 - 60, 16, TextAnchor.MiddleLeft, VDim, false);
+            if (!string.IsNullOrEmpty(closeCmd)) VIBtn(c, parent, "close", "×", closeCmd, w - 51, 22);
+        }
 
         #endregion
     }
