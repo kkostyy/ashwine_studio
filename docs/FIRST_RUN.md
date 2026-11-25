@@ -102,7 +102,18 @@ oxide.grant group admin playeradministration.access.show
 oxide.grant group admin telekinesis.use
 oxide.grant group admin signartist.url
 oxide.grant group admin zonemanager.zone
+oxide.grant group admin permissionsmanager.allowed
+oxide.grant group default buildinggrades.use
+oxide.grant group default removertool.normal
+oxide.grant group default betternostability.use
+oxide.grant group default quicksort.use
+oxide.grant group default furnacesplitter.use
 ```
+BuildingGrades, RemoverTool и BetterNoStability нужны в первую очередь на стройке — если хочешь только там,
+выдавай их не группе default, а группе стройки. BetterNoStability требует `server.stability true`.
+InstantCraft делает крафт мгновенным на всём сервере (в рейд-тесте стройки он и так мгновенный и бесплатный).
+NoDecay: постройки не гниют; то же можно сделать конваром `decay.scale 0`.
+Скины построек: уже есть через Skinner (/skinbase, продаётся в магазине) — отдельный Building Skins не ставим.
 Точки появления: `/spawns new` → `/spawns add` (в нужных местах) → `/spawns save lobby` → в консоли `spawns.config lobby`.
 
 ## 8. Новое 1.4 (своё)

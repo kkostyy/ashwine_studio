@@ -19,6 +19,15 @@ plugins/AdminRadar.cs
 plugins/Vanish.cs
 plugins/PlayerAdministration.cs
 plugins/Telekinesis.cs
+plugins/BuildingGrades.cs
+plugins/RemoverTool.cs
+plugins/BetterNoStability.cs
+plugins/StackSizeController.cs
+plugins/InstantCraft.cs
+plugins/FurnaceSplitter.cs
+plugins/QuickSort.cs
+plugins/NoDecay.cs
+plugins/PermissionsManager.cs
 
 # локальные настройки и секреты
 .env

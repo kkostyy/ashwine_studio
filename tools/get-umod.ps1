@@ -14,7 +14,16 @@ $List = @(
     @{ File = "AdminRadar.cs";          Why = "радар для админов" },
     @{ File = "Vanish.cs";              Why = "невидимость админа" },
     @{ File = "PlayerAdministration.cs";Why = "окно управления игроком" },
-    @{ File = "Telekinesis.cs";         Why = "двигать и вращать объекты (вместо Entity Editor)" }
+    @{ File = "Telekinesis.cs";         Why = "двигать и вращать объекты (вместо Entity Editor)" },
+    @{ File = "BuildingGrades.cs";      Why = "улучшить/понизить всю постройку командой" },
+    @{ File = "RemoverTool.cs";         Why = "удаление построек и объектов (/remove)" },
+    @{ File = "BetterNoStability.cs";   Why = "стройка без устойчивости (/ns)" },
+    @{ File = "StackSizeController.cs"; Why = "большие стаки предметов" },
+    @{ File = "InstantCraft.cs";        Why = "мгновенный крафт" },
+    @{ File = "FurnaceSplitter.cs";     Why = "авто-раскладка в печах" },
+    @{ File = "QuickSort.cs";           Why = "быстрая сортировка инвентаря и ящиков" },
+    @{ File = "NoDecay.cs";             Why = "постройки не гниют" },
+    @{ File = "PermissionsManager.cs";  Why = "права через окно (/perms)" }
 )
 foreach ($p in $List) {
     $url = "https://umod.org/plugins/$($p.File)"

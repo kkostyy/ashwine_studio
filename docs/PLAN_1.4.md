@@ -15,6 +15,18 @@
 | Player Administration | окно управления игроком | — |
 | Entity Editor | двигать/вращать объекты | разметка лобби |
 
+| Building Grades | улучшение/понижение всей постройки | дублирует часть BuildServer, оставляем оба |
+| Remover Tool | удаление построек и объектов | — |
+| Better No Stability | стройка без устойчивости | на umod нет «No Stability», это его замена |
+| Stack Size Controller | большие стаки | — |
+| Instant Craft | мгновенный крафт | — |
+| Furnace Splitter | раскладка в печах | — |
+| Quick Sort | сортировка инвентаря | — |
+| No Decay | без гниения | можно и `decay.scale 0` |
+| Permissions Manager | права через окно | — |
+
+Building Skins отдельно не ставим — скины построек уже даёт Skinner (/skinbase).
+
 Кладём в `third_party/` (в .gitignore не попадают только наши), ставим через `sync-plugins.bat`.
 Перед установкой проверить на umod.org актуальность под текущий Rust.
 
