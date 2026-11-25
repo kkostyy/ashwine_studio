@@ -26,7 +26,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("AimTrain", "Claude", "1.3.2")]
+    [Info("AimTrain", "Claude", "1.4.0")]
     [Description("Аим-трен: мишени, стрейферы, стрелки, бот-зеркало; фейсчеки против игрока и бота")]
     public class AimTrain : RustPlugin
     {
@@ -285,6 +285,11 @@ namespace Oxide.Plugins
             public int BestHsStreak;
             public double DistSum; public int DistN;
             public int FcWins, FcLosses, FcBestReact;
+            // по оружию: выстрелы, попадания, хедшоты
+            public Dictionary<string, int[]> ByWeapon = new Dictionary<string, int[]>();
+            // точность последних сессий (для графика)
+            public List<int> History = new List<int>();
+            public int BestRecoil;          // лучший контроль отдачи, 0–100
         }
 
         private class StoredData
@@ -365,6 +370,9 @@ namespace Oxide.Plugins
             public List<Vector2> BurstHits = new List<Vector2>();
             public List<int> BurstZones = new List<int>();
             public Timer BurstTimer;
+            // тренажёр отдачи: куда уходил прицел относительно первого выстрела (м на 10 м)
+            public Vector3 RecoilBase;
+            public List<Vector2> RecoilPts = new List<Vector2>();
         }
 
         private class FcGame
@@ -486,7 +494,7 @@ namespace Oxide.Plugins
             GiveWeapon(player, p.Weapon, p.Mode == "bow" ? new List<string>() : p.Mods.ToList(), new List<string>());
             if (p.Mode == "bow") GiveArrows(player, p.Weapon);
 
-            int n = p.Mode == "mirror" ? 1 : Mathf.Clamp(p.Bots, 1, _config.MaxBots);
+            int n = p.Mode == "recoil" ? 0 : p.Mode == "mirror" ? 1 : Mathf.Clamp(p.Bots, 1, _config.MaxBots);
             for (int i = 0; i < n; i++) SpawnAimBot(s, i, n);
             DrawHud(s);
             Center(player, T(id, "Go_" + p.Mode), ColRose, 2f);
@@ -534,6 +542,7 @@ namespace Oxide.Plugins
             if (newReact) st.BestReact = bestR;
             bool newHs = s.BestHsStreak > st.BestHsStreak;
             if (newHs) st.BestHsStreak = s.BestHsStreak;
+            if (s.Shots >= 20 && s.P.Mode != "recoil") { st.History.Add(acc); if (st.History.Count > 20) st.History.RemoveAt(0); _dirty = true; }
 
             if (player.IsConnected && !player.IsDead()) player.inventory.Strip();
             if (showResult && player.IsConnected) ShowResult(player, s, newAcc, newReact, newHs);
@@ -837,6 +846,7 @@ namespace Oxide.Plugins
                 s.DistSum += dist; s.DistN++;
                 var st = St(Id(attacker));
                 st.Hits++; if (hs) st.Headshots++; st.DistSum += dist; st.DistN++;
+                var wst = W(st, s.P.Weapon); wst[1]++; if (hs) wst[2]++;
                 if (!bi.Hit)
                 {
                     bi.Hit = true;
@@ -873,8 +883,18 @@ namespace Oxide.Plugins
             if (_aim.TryGetValue(Id(player), out s))
             {
                 s.Shots++;
-                St(Id(player)).Shots++;
+                var stw = St(Id(player));
+                stw.Shots++;
+                W(stw, s.P.Weapon)[0]++;
                 s.BurstShots++;
+                if (s.P.Mode == "recoil")
+                {
+                    var dir = player.eyes.HeadForward();
+                    if (s.BurstShots == 1) { s.RecoilBase = dir; s.RecoilPts.Clear(); }
+                    float yaw = Mathf.DeltaAngle(Mathf.Atan2(s.RecoilBase.x, s.RecoilBase.z) * Mathf.Rad2Deg, Mathf.Atan2(dir.x, dir.z) * Mathf.Rad2Deg);
+                    float pitch = (Mathf.Asin(Mathf.Clamp(dir.y, -1f, 1f)) - Mathf.Asin(Mathf.Clamp(s.RecoilBase.y, -1f, 1f))) * Mathf.Rad2Deg;
+                    s.RecoilPts.Add(new Vector2(Mathf.Tan(yaw * Mathf.Deg2Rad) * 10f, Mathf.Tan(pitch * Mathf.Deg2Rad) * 10f));
+                }
                 s.BurstTimer?.Destroy();
                 var ss = s;
                 s.BurstTimer = timer.Once(0.6f, () => FinishBurst(ss));
@@ -1232,6 +1252,7 @@ namespace Oxide.Plugins
         private void CmdAim(BasePlayer player, string c, string[] a)
         {
             if (a.Length > 0 && (a[0] == "stop" || a[0] == "leave")) { StopAim(player, true); return; }
+            if (a.Length > 0 && a[0] == "stats") { OpenStats(player); return; }
             if (a.Length > 0 && AimModes.Contains(a[0]))
             {
                 // из меню хаба: плашка режима — сразу выбираем его
@@ -1266,6 +1287,7 @@ namespace Oxide.Plugins
             switch (arg.GetString(0))
             {
                 case "close": CloseAll(player); break;
+                case "stats": OpenStats(player); break;
                 case "menu": OpenAimMenu(player); break;
                 case "set":
                     switch (a1)
@@ -1466,7 +1488,7 @@ namespace Oxide.Plugins
 
         #region Интерфейс: меню аим-трена
 
-        private static readonly string[] AimModes = { "targets", "strafers", "flow", "shooters", "mirror", "bow", "fcbot" };
+        private static readonly string[] AimModes = { "targets", "strafers", "flow", "shooters", "mirror", "bow", "recoil", "fcbot" };
 
         private void OpenAimMenu(BasePlayer player)
         {
@@ -1569,8 +1591,11 @@ namespace Oxide.Plugins
 
             bool running = _aim.ContainsKey(id);
             float by = H - M - 48, bw = (W - 2 * M - G) / 2f;
-            Btn(c, R, running ? T(id, "Restart") : T(id, "StartBtn"), "aim.ui start", ColWine, 15, M, by, running ? bw : W - 2 * M, 48, ColText, 14f);
-            if (running) Btn(c, R, T(id, "StopBtn"), "aim.ui stop", ColBtn, 13, M + bw + G, by, bw, 48, ColText, 14f);
+            float sbw = 150f, mw2 = W - 2 * M - sbw - G;
+            float bw2 = (mw2 - G) / 2f;
+            Btn(c, R, running ? T(id, "Restart") : T(id, "StartBtn"), "aim.ui start", ColWine, 15, M, by, running ? bw2 : mw2, 48, ColText, 14f);
+            if (running) Btn(c, R, T(id, "StopBtn"), "aim.ui stop", ColBtn, 13, M + bw2 + G, by, bw2, 48, ColText, 14f);
+            Btn(c, R, T(id, "StBtn"), "aim.ui stats", ColBtn, 13, W - M - sbw, by, sbw, 48, ColText, 14f);
             DestroyWindow(player, UiMain);
             AddUiScaled(player, c);
         }
@@ -1677,9 +1702,139 @@ namespace Oxide.Plugins
         }
 
         // рисунок очереди: силуэт бота и точки попаданий
+        private static int[] W(PStats st, string weapon)
+        {
+            if (st.ByWeapon == null) st.ByWeapon = new Dictionary<string, int[]>();
+            int[] v;
+            if (!st.ByWeapon.TryGetValue(weapon ?? "?", out v)) st.ByWeapon[weapon ?? "?"] = v = new int[3];
+            return v;
+        }
+
+        // примерная отдача без контроля (м на 10 м): вверх и с раскачкой — для сравнения
+        private static Vector2 RefPoint(int i)
+        {
+            float y = i < 8 ? 0.11f * i : 0.88f + 0.035f * (i - 8);
+            float x = 0.28f * Mathf.Sin(i * 0.55f) * Mathf.Min(1f, i / 7f);
+            return new Vector2(x, y);
+        }
+
+        private void FinishRecoil(AimSession s)
+        {
+            int shots = s.BurstShots;
+            var pts = s.RecoilPts.ToList();
+            s.BurstShots = 0; s.BurstHits.Clear(); s.BurstZones.Clear(); s.RecoilPts.Clear();
+            if (shots < 5 || pts.Count < 5) return;
+            var player = s.Player; var id = Id(player);
+            // насколько прицел держался в точке: среднее отклонение в см на 10 м
+            float avg = pts.Skip(1).Average(v => v.magnitude) * 100f;
+            float worst = pts.Max(v => v.magnitude) * 100f;
+            float refAvg = Enumerable.Range(1, pts.Count - 1).Average(i => RefPoint(i).magnitude) * 100f;
+            int score = Mathf.Clamp(Mathf.RoundToInt(100f - 100f * avg / Mathf.Max(1f, refAvg)), 0, 100);
+            var st = St(id);
+            bool rec = score > st.BestRecoil;
+            if (rec) { st.BestRecoil = score; _dirty = true; }
+
+            var c = new CuiElementContainer();
+            const float W2 = 260f, H = 380f, CX = 130f, CY = 300f, PxM = 160f;     // центр — первый выстрел, 1 м = 160 px
+            Root(c, UiSpray, "Hud", ColHud, "0 0.5", "0 0.5", $"16 {-H / 2f}", $"{16 + W2} {H / 2f}", 16f, false);
+            Text(c, UiSpray, T(id, "RecTitle").ToUpper(), 10, 14, 8, W2 - 28, 16, TextAnchor.MiddleLeft, ColDim);
+            Text(c, UiSpray, T(id, "RecScore", score), 20, 14, 24, W2 - 28, 26, TextAnchor.MiddleLeft, score >= 70 ? ColGreen : score >= 40 ? ColGold : ColRose);
+            if (rec) Text(c, UiSpray, T(id, "NewRecord"), 10, 14, 24, W2 - 28, 26, TextAnchor.MiddleRight, ColGold);
+            // сетка
+            Box(c, UiSpray, "1 1 1 0.05", 14, 58, W2 - 28, 256, 10f);
+            Box(c, UiSpray, "1 1 1 0.08", CX - 0.5f, 62, 1, 248, 0f);
+            Box(c, UiSpray, "1 1 1 0.08", 18, CY - 0.5f, W2 - 36, 1, 0f);
+            // эталон без контроля — серым
+            for (int i = 1; i < pts.Count; i++)
+            {
+                var r = RefPoint(i);
+                float x = Mathf.Clamp(CX + r.x * PxM, 18, W2 - 18), y = Mathf.Clamp(CY - r.y * PxM, 62, 310);
+                Box(c, UiSpray, "1 1 1 0.18", x - 2.5f, y - 2.5f, 5, 5, 2.5f);
+            }
+            // твой прицел
+            for (int i = 0; i < pts.Count; i++)
+            {
+                float x = Mathf.Clamp(CX + pts[i].x * PxM, 18, W2 - 18), y = Mathf.Clamp(CY - pts[i].y * PxM, 62, 310);
+                float d = i == 0 ? 9f : 6f;
+                Box(c, UiSpray, i == 0 ? ColGold : ColRose, x - d / 2f, y - d / 2f, d, d, d / 2f);
+            }
+            Text(c, UiSpray, T(id, "RecStats", Mathf.RoundToInt(avg), Mathf.RoundToInt(worst), pts.Count), 10, 14, 320, W2 - 28, 30, TextAnchor.UpperLeft, ColText, FontReg);
+            Text(c, UiSpray, T(id, "RecFoot"), 9, 14, H - 26, W2 - 28, 18, TextAnchor.MiddleLeft, ColDim, FontReg);
+            CuiHelper.DestroyUi(player, UiSpray);
+            AddUiScaled(player, c);
+            var p = player;
+            timer.Once(_config.SprayShow + 3f, () => { if (p != null && p.IsConnected) CuiHelper.DestroyUi(p, UiSpray); });
+        }
+
+        // окно статистики: по оружию и график точности последних сессий
+        private void OpenStats(BasePlayer player)
+        {
+            var id = Id(player);
+            var st = St(id, player.displayName);
+            const float WW = 720f, H = 500f;
+            var c = new CuiElementContainer();
+            Window(c, UiMain, "A", T(id, "StTitle"), T(id, "StSub"), WW, H, "aim.ui close");
+            var R = UiMain;
+            float top = M + 52 + 2 + M;
+            // итоги
+            int acc = st.Shots > 0 ? Mathf.RoundToInt(100f * Mathf.Min(st.Hits, st.Shots) / st.Shots) : 0;
+            int hs = st.Hits > 0 ? Mathf.RoundToInt(100f * st.Headshots / st.Hits) : 0;
+            var tiles = new[]
+            {
+                new[] { st.Shots.ToString(), T(id, "StShots") }, new[] { acc + "%", T(id, "HAcc") }, new[] { hs + "%", T(id, "HHs") },
+                new[] { st.BestReact > 0 ? st.BestReact + " " + T(id, "Ms") : "—", T(id, "BestReact") }, new[] { st.BestRecoil > 0 ? st.BestRecoil + "/100" : "—", T(id, "StRecoil") },
+            };
+            float tw = (WW - 2 * M - 4 * G) / 5f;
+            for (int i = 0; i < tiles.Length; i++)
+            {
+                float x = M + i * (tw + G);
+                Box(c, R, ColPanel, x, top, tw, 64, 12f);
+                Text(c, R, tiles[i][0], 18, x, top + 8, tw, 26, TextAnchor.MiddleCenter, i == 1 ? ColGold : ColText);
+                Text(c, R, tiles[i][1], 10, x, top + 38, tw, 16, TextAnchor.MiddleCenter, ColDim, FontReg);
+            }
+            top += 64 + G;
+            float lw = (WW - 2 * M - G) * 0.56f, rw = WW - 2 * M - G - lw, ph = H - M - top;
+            // по оружию
+            Box(c, R, ColPanel, M, top, lw, ph, 14f);
+            Text(c, R, T(id, "StByWeapon").ToUpper(), 10, M + 14, top + 10, lw - 28, 16, TextAnchor.MiddleLeft, ColDim);
+            Text(c, R, T(id, "StCols"), 10, M + 14, top + 30, lw - 28, 16, TextAnchor.MiddleRight, ColDim, FontReg);
+            var rows = (st.ByWeapon ?? new Dictionary<string, int[]>()).Where(kv => kv.Value[0] > 0).OrderByDescending(kv => kv.Value[0]).Take(8).ToList();
+            float ry = top + 50;
+            if (rows.Count == 0) Text(c, R, T(id, "StEmpty"), 11, M + 14, ry, lw - 28, 40, TextAnchor.UpperLeft, ColDim, FontReg);
+            foreach (var kv in rows)
+            {
+                var name = _config.Weapons.Concat(_config.BowWeapons).FirstOrDefault(w => w.Item == kv.Key)?.Name ?? kv.Key;
+                int a = Mathf.RoundToInt(100f * Mathf.Min(kv.Value[1], kv.Value[0]) / kv.Value[0]);
+                int h = kv.Value[1] > 0 ? Mathf.RoundToInt(100f * kv.Value[2] / kv.Value[1]) : 0;
+                Box(c, R, "1 1 1 0.03", M + 10, ry, lw - 20, 30, 8f);
+                Box(c, R, "0.639 0.086 0.184 0.35", M + 10, ry, (lw - 20) * a / 100f, 30, 8f);
+                Text(c, R, name, 12, M + 20, ry, 150, 30, TextAnchor.MiddleLeft);
+                Text(c, R, $"{kv.Value[0]}      {a}%      {h}%", 11, M + 14, ry, lw - 38, 30, TextAnchor.MiddleRight, ColText, FontReg);
+                ry += 34;
+            }
+            // график точности последних сессий
+            float gx = M + lw + G;
+            Box(c, R, ColPanel, gx, top, rw, ph, 14f);
+            Text(c, R, T(id, "StGraph").ToUpper(), 10, gx + 14, top + 10, rw - 28, 16, TextAnchor.MiddleLeft, ColDim);
+            var hist = st.History ?? new List<int>();
+            float gh = ph - 70, gy = top + 38, bwid = (rw - 28) / 20f;
+            for (int k = 0; k <= 4; k++) Box(c, R, "1 1 1 0.05", gx + 14, gy + gh - gh * k / 4f, rw - 28, 1, 0f);
+            if (hist.Count == 0) Text(c, R, T(id, "StNoHist"), 11, gx + 14, gy, rw - 28, 40, TextAnchor.UpperLeft, ColDim, FontReg);
+            for (int i = 0; i < hist.Count; i++)
+            {
+                float bh = Mathf.Max(3f, gh * hist[i] / 100f);
+                bool last = i == hist.Count - 1;
+                Box(c, R, last ? ColWine : "0.94 0.65 0.69 0.45", gx + 14 + i * bwid + 2, gy + gh - bh, bwid - 4, bh, 3f);
+            }
+            if (hist.Count > 0) Text(c, R, T(id, "StAvg", Mathf.RoundToInt((float)hist.Average()), hist.Count), 10, gx + 14, top + ph - 26, rw - 28, 16, TextAnchor.MiddleLeft, ColText, FontReg);
+            DestroyWindow(player, UiMain);
+            AddUiScaled(player, c);
+        }
+
         private void FinishBurst(AimSession s)
         {
             if (s == null || s.Player == null || !s.Player.IsConnected || !_aim.ContainsKey(Id(s.Player))) return;
+            if (s.P.Mode == "recoil") { FinishRecoil(s); return; }
             int shots = s.BurstShots;
             var hits = s.BurstHits.ToList();
             var zones = s.BurstZones.ToList();
@@ -1844,6 +1999,18 @@ namespace Oxide.Plugins
             new[] { "M_strafers", "Стрейферы", "Strafers" }, new[] { "MD_strafers", "бегают и прыгают", "run and jump" }, new[] { "MIcon_strafers", "S", "S" },
             new[] { "M_flow", "Aim Flow", "Aim Flow" }, new[] { "MD_flow", "всегда в движении", "always moving" }, new[] { "MIcon_flow", "~", "~" },
             new[] { "Go_flow", "Aim Flow: веди прицел!", "Aim Flow: track them!" },
+            new[] { "M_recoil", "Отдача", "Recoil" }, new[] { "MD_recoil", "держи прицел в точке", "hold your aim still" }, new[] { "MIcon_recoil", "R", "R" },
+            new[] { "Go_recoil", "Тренажёр отдачи: стреляй очередью в стену", "Recoil trainer: spray at a wall" },
+            new[] { "RecTitle", "Контроль отдачи", "Recoil control" }, new[] { "RecScore", "{0} / 100", "{0} / 100" },
+            new[] { "RecStats", "Уход прицела: в среднем {0} см, макс {1} см на 10 м · {2} выстр.", "Aim drift: avg {0} cm, max {1} cm at 10 m · {2} shots" },
+            new[] { "RecFoot", "серым — куда ушло бы без контроля", "grey — where it goes uncontrolled" },
+            new[] { "StBtn", "СТАТИСТИКА", "STATS" }, new[] { "StTitle", "СТАТИСТИКА СТРЕЛЬБЫ", "SHOOTING STATS" }, new[] { "StSub", "по оружию и по сессиям", "by weapon and by session" },
+            new[] { "StShots", "выстрелов", "shots" }, new[] { "StRecoil", "лучший контроль отдачи", "best recoil control" },
+            new[] { "StByWeapon", "По оружию", "By weapon" }, new[] { "StCols", "выстр.   точн.   ХШ", "shots   acc   HS" },
+            new[] { "StEmpty", "Сыграй сессию — тут появится точность по каждому оружию.", "Play a session to see accuracy per weapon." },
+            new[] { "StGraph", "Точность последних 20 сессий", "Accuracy, last 20 sessions" },
+            new[] { "StNoHist", "Сессии от 20 выстрелов попадут на график.", "Sessions of 20+ shots appear here." },
+            new[] { "StAvg", "в среднем {0}% за {1} сессий", "average {0}% over {1} sessions" },
             new[] { "M_bow", "Лук", "Bow" }, new[] { "MD_bow", "лук и арбалет", "bow & crossbow" }, new[] { "MIcon_bow", "B", "B" },
             new[] { "Go_bow", "Мишени для лука готовы", "Bow targets ready" },
             new[] { "BowHint", "Стрелы бесконечные. Учитывай падение стрелы на дистанции.", "Infinite arrows. Mind the arrow drop at range." },

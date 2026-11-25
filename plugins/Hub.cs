@@ -50,7 +50,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Hub", "Claude", "1.4.4")]
+    [Info("Hub", "Claude", "1.5.0")]
     [Description("Хаб-сервер: табличка, лобби, режимы, порталы, NPC, инвентарь на режим, монеты, профиль")]
     public class Hub : RustPlugin
     {
@@ -2189,7 +2189,7 @@ namespace Oxide.Plugins
         {
             new[] { "targets", "aim", "aim targets" }, new[] { "strafers", "group", "aim strafers" }, new[] { "flow", "star", "aim flow" },
             new[] { "shooters", "arena", "aim shooters" }, new[] { "mirror", "eye", "aim mirror" }, new[] { "bow", "flag", "aim bow" },
-            new[] { "fcbot", "lock", "aim fcbot" },
+            new[] { "recoil", "aim", "aim recoil" }, new[] { "fcbot", "lock", "aim fcbot" },
         };
 
         private void PageAim(CuiElementContainer c, BasePlayer player)
@@ -3007,6 +3007,7 @@ namespace Oxide.Plugins
             new[] { "AimM_shooters", "Стреляют в ответ", "Shoot back" }, new[] { "AimMD_shooters", "убей первым", "kill first" },
             new[] { "AimM_mirror", "Бот-зеркало", "Mirror bot" }, new[] { "AimMD_mirror", "повторяет твои движения", "copies your moves" },
             new[] { "AimM_bow", "Лук", "Bow" }, new[] { "AimMD_bow", "лук и арбалет, 10–70 м", "bow & crossbow, 10–70 m" },
+            new[] { "AimM_recoil", "Отдача", "Recoil" }, new[] { "AimMD_recoil", "держи прицел в точке", "hold your aim still" },
             new[] { "AimM_fcbot", "Фейсчек с ботом", "Facecheck vs bot" }, new[] { "AimMD_fcbot", "дверь по таймеру", "timed door" },
             new[] { "AimM_facecheck", "Фейсчеки 1v1", "Facechecks 1v1" }, new[] { "AimMD_facecheck", "против игрока, до 7 побед", "vs a player, first to 7" },
             new[] { "AimFoot_aim", "мишени · Aim Flow · лук · зеркало", "targets · Aim Flow · bow · mirror" },

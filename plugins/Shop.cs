@@ -25,7 +25,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Shop", "Claude", "1.2.0")]
+    [Info("Shop", "Claude", "1.2.1")]
     [Description("Магазин за монеты: скины на всё, титулы, цвет ника, VIP и вход без очереди")]
     public class Shop : RustPlugin
     {
@@ -160,6 +160,8 @@ namespace Oxide.Plugins
             list.Add(new Offer { Id = "p_auto", Cat = "skins", Name = "Авто-скины", Item = "rifle.ak", Perms = "skinner.craft,skinner.skinauto", Price = 700, Desc = "Скины сами надеваются на всё" });
             list.Add(new Offer { Id = "p_inv", Cat = "skins", Name = "Весь инвентарь", Item = "box.wooden.large", Perms = "skinner.skininv,skinner.skincon", Price = 500, Desc = "/skininv, /skincon — всё разом" });
             list.Add(new Offer { Id = "p_base", Cat = "skins", Name = "Скины построек", Item = "door.hinged.metal", Perms = "skinner.items,skinner.skinbase", Price = 500, Desc = "/skinitem, /skinbase — база" });
+            list.Add(new Offer { Id = "p_em_dance", Cat = "skins", Name = "Танцы", Item = "fun.guitar", Perms = "emotes.dance", Price = 600, Desc = "/emote — танцы в меню жестов" });
+            list.Add(new Offer { Id = "p_em_taunt", Cat = "skins", Name = "Насмешки", Item = "skull.human", Perms = "emotes.taunt", Price = 800, Desc = "/emote — дразнилки после победы" });
             list.Add(new Offer { Id = "p_eyes", Cat = "skins", Name = "Светящиеся глаза", Item = "gloweyes", Perms = "glowingeyes.use", Price = 0, VipOnly = true, Desc = "/eyes — включить и выключить" });
             Func<string, string, string, int, Offer> Ti = (id, t, c, p) => new Offer { Id = id, Cat = "title", Name = t, Title = t, Color = c, Price = p };
             list.Add(Ti("t_aim", "Аимер", "#f0a6b1", 500));
