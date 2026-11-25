@@ -25,7 +25,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Ranked", "Claude", "1.3.2")]
+    [Info("Ranked", "Claude", "1.3.3")]
     [Description("Рейтинговые матчи 1v1–5v5: два ранкеда, MMR, ранги, сезоны, таблица лидеров")]
     public class Ranked : RustPlugin
     {
@@ -697,6 +697,7 @@ namespace Oxide.Plugins
         {
             if (!_matches.Contains(m)) return;
             m.Round++;
+            if (m.Round == 1) plugins.Find("MatchReplay")?.Call("ReplayBegin", "rk_" + m.Id, $"Ранкед {LadderShort(m.Ladder)} {m.Format}v{m.Format}", m.Teams[0].ToList(), m.Teams[1].ToList());
             m.State = "countdown";
             m.Alive.Clear();
             m.Extras.Clear();
@@ -832,6 +833,7 @@ namespace Oxide.Plugins
         {
             if (m.State == "ended") return;
             m.State = "ended";
+            plugins.Find("MatchReplay")?.Call("ReplayEnd", "rk_" + m.Id, $"{m.Score[0]}:{m.Score[1]}");
             _matches.Remove(m);
             int[] avg =
             {

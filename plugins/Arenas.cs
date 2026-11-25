@@ -27,7 +27,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Arenas", "Claude", "1.3.0")]
+    [Info("Arenas", "Claude", "1.3.1")]
     [Description("FFA, TDM, ган-гейм, дуэли и свои арены с экраном смерти, киллфидом и статистикой")]
     public class Arenas : RustPlugin
     {
@@ -1076,6 +1076,9 @@ namespace Oxide.Plugins
         {
             if (!_sessions.ContainsKey(s.Id)) return;
             s.Round++;
+            if (s.Round == 1 && s.Kind == "match")
+                plugins.Find("MatchReplay")?.Call("ReplayBegin", "ar_" + s.Id, (s.IsDuel ? "Дуэль · " : "Арена · ") + s.Arena?.Name,
+                    s.Team.Where(kv => kv.Value == 0).Select(kv => kv.Key).ToList(), s.Team.Where(kv => kv.Value == 1).Select(kv => kv.Key).ToList());
             s.State = "countdown";
             s.Alive.Clear();
             CleanupBuilt(s);
@@ -1147,6 +1150,7 @@ namespace Oxide.Plugins
         {
             if (s.State == "ended") return;
             s.State = "ended";
+            plugins.Find("MatchReplay")?.Call("ReplayEnd", "ar_" + s.Id, $"{s.Score[0]}:{s.Score[1]}");
             var players = s.Players.ToList();
             if (!string.IsNullOrEmpty(s.Tag))
             {
