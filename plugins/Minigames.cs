@@ -31,7 +31,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Minigames", "Claude", "1.2.0")]
+    [Info("Minigames", "Claude", "1.3.0")]
     [Description("Роум, хели-бои, Bedwars и рейд против рейда")]
     public class Minigames : RustPlugin
     {
@@ -90,7 +90,7 @@ namespace Oxide.Plugins
             ScaleHud(p, c);
             CuiHelper.AddUi(p, c);
         }
-        [PluginReference] private Plugin Hub;
+        [PluginReference] private Plugin Hub, Ranked;
 
         #region Константы
 
@@ -188,6 +188,22 @@ namespace Oxide.Plugins
                 new KitEntry { Item = "ammo.rocket.hv", Amount = 12 }, new KitEntry { Item = "ammo.rifle", Amount = 500 },
             };
             [JsonProperty("Хели: монеты победителям")] public int HeliWinCoins = 30;
+
+            [JsonProperty("Вертолётный ММ: побед в раундах до конца матча")] public int HmRounds = 3;
+            [JsonProperty("Вертолётный ММ: отсчёт перед раундом (сек)")] public int HmCountdown = 6;
+            [JsonProperty("Вертолётный ММ: пауза между раундами (сек)")] public int HmBetween = 5;
+            [JsonProperty("Вертолётный ММ: окно MMR на старте")] public int HmWindow = 150;
+            [JsonProperty("Вертолётный ММ: окно растёт на (за 15 сек)")] public int HmWindowStep = 75;
+            [JsonProperty("Вертолётный ММ: монеты за победу")] public int HmWinCoins = 20;
+            [JsonProperty("Вертолётный ММ: топливо")] public int HmFuel = 150;
+            [JsonProperty("Вертолётный ММ: набор стрелка мини (ракеты)")] public List<KitEntry> HmMiniGunner = new List<KitEntry>
+            {
+                new KitEntry { Item = "homingmissile.launcher", Container = "belt" }, new KitEntry { Item = "ammo.rocket.seeker", Amount = 8 },
+                new KitEntry { Item = "rocket.launcher", Container = "belt" }, new KitEntry { Item = "ammo.rocket.basic", Amount = 6 },
+                new KitEntry { Item = "flare", Amount = 4, Container = "belt" },
+                new KitEntry { Item = "metal.facemask", Container = "wear" }, new KitEntry { Item = "roadsign.jacket", Container = "wear" },
+                new KitEntry { Item = "hoodie", Container = "wear" }, new KitEntry { Item = "pants", Container = "wear" },
+            };
 
             [JsonProperty("Bedwars: кровать — здоровье")] public float BedHealth = 600f;
             [JsonProperty("Bedwars: генератор острова раз в (сек)")] public float GenIsland = 2f;
@@ -400,21 +416,25 @@ namespace Oxide.Plugins
             RegisterLang();
             InitRoundedSprite();
             timer.Every(1f, Tick);
+            timer.Every(1f, HmTick);
         }
 
         private void Unload()
         {
             foreach (var g in _games.Values.ToList()) EndGame(g, -1, false);
+            foreach (var hm in _hms.ToList()) HmEnd(hm, -1, true);
             foreach (var p in BasePlayer.activePlayerList)
                 foreach (var ui in new[] { UiMain, UiHud, UiCenter, UiToast }) { CuiHelper.DestroyUi(p, ui); CuiHelper.DestroyUi(p, ui + ".dim"); }
             SaveData();
         }
 
-        private void OnPlayerDisconnected(BasePlayer player, string reason) { if (player != null) Leave(player, false); }
+        private void OnPlayerDisconnected(BasePlayer player, string reason) { if (player != null) { HmLeave(player, false); Leave(player, false); } }
 
         private void OnHubModeChanged(BasePlayer player, string from, string to)
         {
             if (player == null) return;
+            var hmm = HmOf(player);
+            if (hmm != null && to != HubModeOf("heli") && hmm.State != "ended") HmLeave(player, false);
             var g = GameOf(player);
             if (g != null && HubModeOf(g.Type) != to) Leave(player, false);
             string pending;
@@ -974,6 +994,9 @@ namespace Oxide.Plugins
                 return null;
             }
 
+            var hmr = HmDamage(entity, attacker);
+            if (hmr != null) return hmr;
+
             var victim = entity as BasePlayer;
             if (victim == null)
             {
@@ -1007,6 +1030,7 @@ namespace Oxide.Plugins
         private void OnEntityDeath(BaseCombatEntity entity, HitInfo info)
         {
             if (entity == null) return;
+            HmEntityDeath(entity);
             foreach (var g in _games.Values.ToList())
             {
                 if (g.Type == "bedwars")
@@ -1030,6 +1054,7 @@ namespace Oxide.Plugins
 
         private void OnPlayerDeath(BasePlayer victim, HitInfo info)
         {
+            if (HmPlayerDeath(victim, info)) return;
             var g = GameOf(victim);
             if (g == null || g.State == "ended") return;
             var vid = Id(victim);
@@ -1068,6 +1093,8 @@ namespace Oxide.Plugins
 
         private object OnHubRespawn(BasePlayer player)
         {
+            var hm = HmOf(player);
+            if (hm != null) { var hp = HmSpawnPt(hm, Id(player)); return new BasePlayer.SpawnPoint { pos = hp + Vector3.up * 0.2f, rot = Quaternion.identity }; }
             var g = GameOf(player);
             if (g == null || g.State == "queue" || g.State == "countdown") return null;
             if (_out.Contains(Id(player))) return null;
@@ -1078,6 +1105,8 @@ namespace Oxide.Plugins
 
         private object OnHubRespawned(BasePlayer player, string mode)
         {
+            var hm = HmOf(player);
+            if (hm != null) { Heal(player); player.inventory.Strip(); HmKit(player, hm); DrawHmHud(player, hm); return true; }
             var g = GameOf(player);
             if (g == null || g.State == "queue" || g.State == "countdown") return null;
             if (_out.Contains(Id(player))) { timer.Once(0.5f, () => { if (player != null) Leave(player, true); }); return true; }
@@ -1160,7 +1189,8 @@ namespace Oxide.Plugins
         [ChatCommand("mg")]
         private void CmdMg(BasePlayer player, string c, string[] a)
         {
-            if (a.Length > 0 && a[0] == "leave") { Leave(player, true); return; }
+            if (a.Length > 0 && a[0] == "leave") { HmLeave(player, true); Leave(player, true); return; }
+            if (a.Length > 0 && (a[0] == "helimm" || a[0] == "hmm")) { OpenHmMenu(player); return; }
             string type = a.Length > 0 && Types.Contains(a[0]) ? a[0] : GameOf(player)?.Type ?? "roam";
             OpenMenu(player, type);
         }
@@ -1191,6 +1221,11 @@ namespace Oxide.Plugins
                     else Join(player, "roam");
                     break;
                 }
+                case "hm": OpenHmMenu(player); break;
+                case "hm.fmt": _hmFmt[id] = a1; OpenHmMenu(player); break;
+                case "hm.ranked": _hmRanked[id] = !(_hmRanked.ContainsKey(id) && _hmRanked[id]); OpenHmMenu(player); break;
+                case "hm.join": { string f; if (!_hmFmt.TryGetValue(id, out f)) f = "a1"; HeliQueue(player, f, _hmRanked.ContainsKey(id) && _hmRanked[id]); break; }
+                case "hm.cancel": HmCancel(player); OpenHmMenu(player); break;
                 case "bw.buy": BuyBw(player, int.Parse(a1)); break;
                 case "bw.shop": OpenBwShop(player); break;
             }
@@ -1352,6 +1387,487 @@ namespace Oxide.Plugins
         private void DestroyWindow(BasePlayer p, string name) { CuiHelper.DestroyUi(p, name + ".dim"); CuiHelper.DestroyUi(p, name); }
 
         private void CloseAll(BasePlayer p) => DestroyWindow(p, UiMain);
+
+        #endregion
+
+        #region Вертолётный ММ
+
+        // форматы: a1 — атак-хели 1 на 1, a2 — атак-хели 2 на 2 (пилот + стрелок), m2 — мини 2 на 2 (пилот + стрелок с ракетами)
+        private static readonly string[] HmFormats = { "a1", "a2", "m2" };
+        private static int HmSize(string f) => f == "a1" ? 1 : 2;
+        private static bool HmMini(string f) => f == "m2";
+
+        private class HmEntry
+        {
+            public List<ulong> Members = new List<ulong>();
+            public string Fmt;
+            public bool Ranked;
+            public float Since;
+            public int Avg;
+        }
+
+        private class HeliMatch
+        {
+            public string Fmt;
+            public bool Ranked;
+            public GameMap Map;
+            public List<ulong>[] Teams = { new List<ulong>(), new List<ulong>() };
+            public int[] Score = new int[2];
+            public int Round;
+            public string State = "countdown";      // countdown | live | between | ended
+            public float Until;
+            public HashSet<ulong> Dead = new HashSet<ulong>();
+            public List<BaseEntity>[] Veh = { new List<BaseEntity>(), new List<BaseEntity>() };
+            public IEnumerable<ulong> All => Teams[0].Concat(Teams[1]);
+            public int TeamOf(ulong id) => Teams[0].Contains(id) ? 0 : Teams[1].Contains(id) ? 1 : -1;
+        }
+
+        private readonly List<HmEntry> _hmQueue = new List<HmEntry>();
+        private readonly List<HeliMatch> _hms = new List<HeliMatch>();
+        private readonly Dictionary<ulong, HeliMatch> _hmIn = new Dictionary<ulong, HeliMatch>();
+        private readonly Dictionary<ulong, string> _hmFmt = new Dictionary<ulong, string>();
+        private readonly Dictionary<ulong, bool> _hmRanked = new Dictionary<ulong, bool>();
+
+        private HeliMatch HmOf(BasePlayer p) { HeliMatch m; return p != null && _hmIn.TryGetValue(Id(p), out m) ? m : null; }
+        private HmEntry HmQueueOf(ulong id) => _hmQueue.FirstOrDefault(e => e.Members.Contains(id));
+
+        private int HmMmr(ulong id, string fmt) => Ranked != null && Ranked.Call("GetLadderMmr", id, "heli", HmSize(fmt)) is int ? (int)Ranked.Call("GetLadderMmr", id, "heli", HmSize(fmt)) : 1000;
+
+        private List<ulong> HmParty(BasePlayer player)
+        {
+            if (player.currentTeam == 0UL) return new List<ulong> { Id(player) };
+            var list = BasePlayer.activePlayerList.Where(p => p.currentTeam == player.currentTeam && p.IsConnected).Select(Id).ToList();
+            if (!list.Contains(Id(player))) list.Add(Id(player));
+            return list;
+        }
+
+        // вызывается из Ranked (кнопка «Искать вертолётный бой») и из меню /mg helimm
+        [HookMethod("HeliQueue")]
+        public void HeliQueue(BasePlayer player, string fmt, bool ranked)
+        {
+            if (player == null) return;
+            var id = Id(player);
+            if (!HmFormats.Contains(fmt)) fmt = "a1";
+            if (HmOf(player) != null) { Toast(player, T(id, "HmInMatch"), true); return; }
+            if (HmQueueOf(id) != null) { Toast(player, T(id, "HmAlready"), false); OpenHmMenu(player); return; }
+            if (!_data.Maps.Values.Any(m => m.Enabled && m.Type == "heli" && m.Pads.Count >= 2)) { Toast(player, T(id, "HmNoMap"), true); return; }
+            var party = HmParty(player);
+            if (party.Count > HmSize(fmt)) { Toast(player, T(id, "HmPartyBig", HmSize(fmt)), true); return; }
+            if (party.Any(x => _hmIn.ContainsKey(x) || HmQueueOf(x) != null)) { Toast(player, T(id, "HmPartyBusy"), true); return; }
+            var e = new HmEntry { Members = party, Fmt = fmt, Ranked = ranked, Since = Time.realtimeSinceStartup };
+            e.Avg = Mathf.RoundToInt((float)party.Average(x => HmMmr(x, fmt)));
+            _hmQueue.Add(e);
+            foreach (var m in party) { var p = BasePlayer.FindByID(m); if (p != null) Toast(p, T(m, "HmQueued", T(m, "Hm_" + fmt)), false); }
+            _hmFmt[id] = fmt; _hmRanked[id] = ranked;
+            OpenHmMenu(player);
+            HmTryMatch();
+        }
+
+        private void HmCancel(BasePlayer player)
+        {
+            var e = HmQueueOf(Id(player));
+            if (e == null) return;
+            _hmQueue.Remove(e);
+            foreach (var m in e.Members) { var p = BasePlayer.FindByID(m); if (p != null) Toast(p, T(m, "HmLeftQueue"), false); }
+        }
+
+        private int HmWin(HmEntry e) => _config.HmWindow + _config.HmWindowStep * Mathf.FloorToInt((Time.realtimeSinceStartup - e.Since) / 15f);
+
+        private GameMap HmFreeMap()
+        {
+            var busy = new HashSet<string>(_games.Values.Where(g => g.Type == "heli").Select(g => g.Map.Id).Concat(_hms.Select(h => h.Map.Id)));
+            return _data.Maps.Values.Where(m => m.Enabled && m.Type == "heli" && m.Pads.Count >= 2 && !busy.Contains(m.Id))
+                .OrderBy(m => UnityEngine.Random.Range(0, 1000)).FirstOrDefault();
+        }
+
+        // подбор: по формату и типу (рейтинг/обычный), MMR в окне, пати целиком, один IP — не соперники
+        private void HmTryMatch()
+        {
+            foreach (var fmt in HmFormats)
+                foreach (var ranked in new[] { true, false })
+                {
+                    int size = HmSize(fmt);
+                    var q = _hmQueue.Where(e => e.Fmt == fmt && e.Ranked == ranked).OrderBy(e => e.Since).ToList();
+                    while (q.Count > 0)
+                    {
+                        var anchor = q[0];
+                        var cands = q.Where(e => !ranked || Mathf.Abs(e.Avg - anchor.Avg) <= Mathf.Max(HmWin(anchor), HmWin(e))).OrderBy(e => Mathf.Abs(e.Avg - anchor.Avg)).ToList();
+                        var teams = new[] { new List<HmEntry>(), new List<HmEntry>() };
+                        int[] fill = new int[2];
+                        foreach (var e in cands)
+                        {
+                            int n = e.Members.Count;
+                            Func<int, bool> fits = t => fill[t] + n <= size && !teams[1 - t].Any(o => o.Members.Any(x => e.Members.Any(y => Hub != null && Hub.Call("SameIp", x, y) is bool && (bool)Hub.Call("SameIp", x, y))));
+                            int team = e == anchor ? 0 : fits(0) && (!fits(1) || fill[0] <= fill[1]) ? 0 : fits(1) ? 1 : -1;
+                            if (team < 0 || !fits(team)) continue;
+                            teams[team].Add(e); fill[team] += n;
+                            if (fill[0] == size && fill[1] == size) break;
+                        }
+                        if (fill[0] != size || fill[1] != size) { q.RemoveAt(0); continue; }
+                        var map = HmFreeMap();
+                        if (map == null) return;
+                        foreach (var e in teams[0].Concat(teams[1])) { _hmQueue.Remove(e); q.Remove(e); }
+                        HmCreate(fmt, ranked, map, teams[0].SelectMany(e => e.Members).ToList(), teams[1].SelectMany(e => e.Members).ToList());
+                    }
+                }
+        }
+
+        private void HmCreate(string fmt, bool ranked, GameMap map, List<ulong> a, List<ulong> b)
+        {
+            var m = new HeliMatch { Fmt = fmt, Ranked = ranked, Map = map };
+            m.Teams[0].AddRange(a); m.Teams[1].AddRange(b);
+            _hms.Add(m);
+            var mode = HubModeOf("heli");
+            foreach (var id in m.All)
+            {
+                _hmIn[id] = m;
+                var p = BasePlayer.FindByID(id);
+                if (p == null) continue;
+                CloseAll(p);
+                Leave(p, false);
+                if (Hub != null && !string.IsNullOrEmpty(mode) && Hub.Call("GetMode", p) as string != mode) Hub.Call("SendToMode", p, mode, true);
+                Center(p, T(id, "HmFound", T(id, "Hm_" + fmt)) + (ranked ? "\n<size=12>" + T(id, "HmRankedTag") + "</size>" : ""), ColGold, 3f);
+            }
+            timer.Once(1.5f, () => HmStartRound(m));
+        }
+
+        private Vector3 HmSpawnPt(HeliMatch m, ulong id)
+        {
+            int t = Mathf.Max(0, m.TeamOf(id));
+            var list = m.Map.Spawns.Count > t ? m.Map.Spawns[t] : null;
+            if (list != null && list.Count > 0) return list[(int)(id % (ulong)list.Count)].V;
+            var pad = m.Map.Pads[t % m.Map.Pads.Count].V;
+            int idx = m.Teams[t].IndexOf(id);
+            return pad + new Vector3(6f + idx * 2f, 0.5f, 0f);
+        }
+
+        private void HmKit(BasePlayer p, HeliMatch m)
+        {
+            var id = Id(p);
+            int t = m.TeamOf(id);
+            bool gunner = HmMini(m.Fmt) && t >= 0 && m.Teams[t].IndexOf(id) == 1;
+            GiveKit(p, gunner ? _config.HmMiniGunner : _config.HeliKit);
+        }
+
+        private BaseEntity HmVehicle(HeliMatch m, int team, Pt pad)
+        {
+            var e = GameManager.server.CreateEntity(HmMini(m.Fmt) ? PrefabMini : PrefabAttackHeli, pad.V + Vector3.up * 0.3f, Quaternion.Euler(0f, pad.Yaw, 0f));
+            if (e == null) { PrintWarning("Вертолётный ММ: не создан транспорт — проверь префабы"); return null; }
+            e.enableSaving = false;
+            e.Spawn();
+            AddFuel(e, _config.HmFuel);
+            if (!HmMini(m.Fmt))
+                NextTick(() =>
+                {
+                    if (e == null || e.IsDestroyed) return;
+                    foreach (var child in e.children.ToList())
+                    {
+                        var sc = child as StorageContainer;
+                        if (sc?.inventory == null) continue;
+                        foreach (var a in _config.HeliAmmo) { var it = ItemManager.CreateByName(a.Item, a.Amount, 0UL); if (it != null && !it.MoveToContainer(sc.inventory)) it.Remove(); }
+                    }
+                });
+            m.Veh[team].Add(e);
+            return e;
+        }
+
+        private void HmClearVeh(HeliMatch m)
+        {
+            for (int t = 0; t < 2; t++) { foreach (var e in m.Veh[t]) if (e != null && !e.IsDestroyed) e.Kill(); m.Veh[t].Clear(); }
+        }
+
+        private void HmStartRound(HeliMatch m)
+        {
+            if (!_hms.Contains(m) || m.State == "ended") return;
+            m.Round++;
+            m.Dead.Clear();
+            HmClearVeh(m);
+            // красные — чётные площадки, синие — нечётные; на 1v1 и 2v2 — по одной машине на команду или игрока
+            for (int t = 0; t < 2; t++)
+            {
+                var pads = m.Map.Pads.Where((pt, i) => i % 2 == t).ToList();
+                if (pads.Count == 0) pads.Add(m.Map.Pads[t % m.Map.Pads.Count]);
+                int need = m.Fmt == "a1" ? m.Teams[t].Count : 1;
+                for (int i = 0; i < need; i++) HmVehicle(m, t, pads[i % pads.Count]);
+            }
+            foreach (var id in m.All.ToList())
+            {
+                var p = BasePlayer.FindByID(id);
+                if (p == null || !p.IsConnected) continue;
+                if (p.IsDead()) { p.Respawn(); continue; }
+                if (p.isMounted) p.EnsureDismounted();
+                p.Teleport(HmSpawnPt(m, id) + Vector3.up * 0.2f);
+                Heal(p);
+                p.inventory.Strip();
+                HmKit(p, m);
+            }
+            m.State = "countdown";
+            m.Until = Time.realtimeSinceStartup + _config.HmCountdown;
+            foreach (var id in m.All) { var p = BasePlayer.FindByID(id); if (p != null) { Center(p, T(id, "HmRound", m.Round) + "\n<size=13>" + T(id, "HmBoard") + "</size>", ColText, 2.5f); DrawHmHud(p, m); } }
+        }
+
+        private bool HmTeamOut(HeliMatch m, int t)
+        {
+            bool allDead = m.Teams[t].All(x => m.Dead.Contains(x) || BasePlayer.FindByID(x) == null);
+            bool noVeh = m.Veh[t].Count > 0 && m.Veh[t].All(e => e == null || e.IsDestroyed);
+            return allDead || noVeh;
+        }
+
+        private void HmTick()
+        {
+            float now = Time.realtimeSinceStartup;
+            if (_hmQueue.Count > 0) HmTryMatch();
+            foreach (var m in _hms.ToList())
+            {
+                if (m.State == "countdown" && now >= m.Until)
+                {
+                    m.State = "live";
+                    foreach (var id in m.All) { var p = BasePlayer.FindByID(id); if (p != null) Center(p, T(id, "HmGo"), ColGreen, 1.5f); }
+                }
+                else if (m.State == "live")
+                {
+                    // зона: за радиусом и выше потолка машина теряет ХП
+                    for (int t = 0; t < 2; t++) foreach (var e in m.Veh[t]) if (e != null && !e.IsDestroyed) HmBounds(m, e);
+                    bool o0 = HmTeamOut(m, 0), o1 = HmTeamOut(m, 1);
+                    if (o0 || o1) HmEndRound(m, o0 && o1 ? -1 : o0 ? 1 : 0);
+                }
+                else if (m.State == "between" && now >= m.Until) HmStartRound(m);
+                if (m.State != "ended") foreach (var id in m.All) { var p = BasePlayer.FindByID(id); if (p != null && p.IsConnected) DrawHmHud(p, m); }
+            }
+        }
+
+        private void HmBounds(HeliMatch m, BaseEntity veh)
+        {
+            var pos = veh.transform.position;
+            float ground = TerrainMeta.HeightMap != null ? TerrainMeta.HeightMap.GetHeight(pos) : 0f;
+            bool outR = m.Map.Center != null && Vector3.Distance(new Vector3(pos.x, 0f, pos.z), new Vector3(m.Map.Center.X, 0f, m.Map.Center.Z)) > m.Map.Radius;
+            bool outH = pos.y - ground > _config.HeliCeiling;
+            if (!outR && !outH) return;
+            var ce = veh as BaseCombatEntity;
+            if (ce != null) ce.Hurt(ce.MaxHealth() * 0.08f, Rust.DamageType.Generic, null, false);
+            foreach (var id in m.All)
+            {
+                var p = BasePlayer.FindByID(id);
+                if (p != null && p.isMounted && Vector3.Distance(p.transform.position, pos) < 8f) Toast(p, outH ? T(id, "Ceiling") : T(id, "HeliBorder"), true);
+            }
+        }
+
+        private void HmEndRound(HeliMatch m, int winner)
+        {
+            if (m.State != "live") return;
+            if (winner >= 0) m.Score[winner]++;
+            if (winner >= 0 && m.Score[winner] >= Mathf.Max(1, _config.HmRounds)) { HmEnd(m, winner, false); return; }
+            m.State = "between";
+            m.Until = Time.realtimeSinceStartup + _config.HmBetween;
+            foreach (var id in m.All)
+            {
+                var p = BasePlayer.FindByID(id);
+                if (p == null) continue;
+                int t = m.TeamOf(id);
+                Center(p, (winner < 0 ? T(id, "HmDraw") : winner == t ? T(id, "HmRoundWin") : T(id, "HmRoundLose")) + $"\n<size=18>{m.Score[t]} : {m.Score[1 - t]}</size>", winner == t ? ColGreen : winner < 0 ? ColText : ColRed, 3f);
+            }
+        }
+
+        private void HmEnd(HeliMatch m, int winner, bool forfeit)
+        {
+            if (m.State == "ended") return;
+            m.State = "ended";
+            _hms.Remove(m);
+            HmClearVeh(m);
+            Dictionary<ulong, int> deltas = null;
+            if (winner >= 0 && m.Ranked && Ranked != null)
+                deltas = Ranked.Call("ReportExternal", "heli", HmSize(m.Fmt), m.Teams[winner].ToList(), m.Teams[1 - winner].ToList(), $"{m.Score[winner]}:{m.Score[1 - winner]}") as Dictionary<ulong, int>;
+            var mode = HubModeOf("heli");
+            foreach (var id in m.All.ToList())
+            {
+                _hmIn.Remove(id);
+                int t = m.TeamOf(id);
+                bool win = t == winner;
+                if (win && winner >= 0)
+                {
+                    W(id, "heli");
+                    if (Hub != null && _config.HmWinCoins > 0) Hub.Call("AddCoins", id, _config.HmWinCoins, T(id, "HmCoins"));
+                }
+                var p = BasePlayer.FindByID(id);
+                if (p == null || !p.IsConnected) continue;
+                CuiHelper.DestroyUi(p, UiHud);
+                _hudJson.Remove(id);
+                int d = 0; if (deltas != null) deltas.TryGetValue(id, out d);
+                string mmr = deltas != null ? $"\n<size=13>MMR {(d >= 0 ? "+" : "")}{d}</size>" : "";
+                if (winner >= 0) Center(p, (win ? T(id, "HmWin") : T(id, "HmLose")) + $"\n<size=18>{m.Score[t]} : {m.Score[1 - t]}</size>" + (forfeit ? "\n<size=12>" + T(id, "HmForfeit") + "</size>" : "") + mmr, win ? ColGreen : ColRed, 5f);
+                var pl = p;
+                timer.Once(4f, () =>
+                {
+                    if (pl == null || !pl.IsConnected || pl.IsDead() || _hmIn.ContainsKey(Id(pl))) return;
+                    if (pl.isMounted) pl.EnsureDismounted();
+                    pl.inventory.Strip();
+                    if (Hub != null && !string.IsNullOrEmpty(mode)) Hub.Call("SendToMode", pl, mode, true);
+                });
+            }
+        }
+
+        private void W(ulong id, string type)
+        {
+            Dictionary<string, int> w;
+            if (!_data.Wins.TryGetValue(id, out w)) _data.Wins[id] = w = new Dictionary<string, int>();
+            int n; w.TryGetValue(type, out n); w[type] = n + 1;
+        }
+
+        // выход: из очереди — просто убираем; из матча — техническое поражение команде
+        private void HmLeave(BasePlayer player, bool toHall)
+        {
+            if (player == null) return;
+            var id = Id(player);
+            var e = HmQueueOf(id);
+            if (e != null) { e.Members.Remove(id); if (e.Members.Count == 0) _hmQueue.Remove(e); }
+            var m = HmOf(player);
+            if (m == null || m.State == "ended") return;
+            int t = m.TeamOf(id);
+            m.Teams[t].Remove(id);
+            _hmIn.Remove(id);
+            CuiHelper.DestroyUi(player, UiHud);
+            if (m.Teams[t].Count == 0 || m.Teams[t].All(x => BasePlayer.FindByID(x) == null))
+            {
+                m.Teams[t].Add(id);   // чтобы рейтинг посчитался и ушедшему
+                HmEnd(m, 1 - t, true);
+                _hmIn.Remove(id);
+            }
+            if (toHall && player.IsConnected && !player.IsDead() && Hub != null) Hub.Call("SendToMode", player, HubModeOf("heli"), true);
+        }
+
+        private object HmDamage(BaseCombatEntity entity, BaseEntity attackerEnt)
+        {
+            var attacker = attackerEnt as BasePlayer;
+            var victim = entity as BasePlayer;
+            var vm = HmOf(victim);
+            var am = HmOf(attacker);
+            if (vm == null && am == null)
+            {
+                // машины матча бьют только участники этого матча
+                foreach (var m in _hms) for (int t = 0; t < 2; t++) if (m.Veh[t].Contains(entity as BaseEntity))
+                    {
+                        if (m.State != "live") return true;
+                        if (attacker != null && HmOf(attacker) != m) return true;
+                        if (attacker != null && m.TeamOf(Id(attacker)) == t) return true;   // свою машину не ломаем
+                        return null;
+                    }
+                return null;
+            }
+            if (victim != null)
+            {
+                if (vm == null) return attacker != null && attacker != victim ? (object)true : null;
+                if (vm.State != "live") return true;
+                if (attacker == null || attacker == victim) return null;
+                if (am != vm) return true;
+                if (vm.TeamOf(Id(attacker)) == vm.TeamOf(Id(victim))) return true;
+                return null;
+            }
+            // игрок матча стреляет по чужой машине/постройке вне матча
+            if (am != null) { for (int t = 0; t < 2; t++) if (am.Veh[t].Contains(entity as BaseEntity)) return am.State != "live" || am.TeamOf(Id(attacker)) == t ? (object)true : null; return true; }
+            return null;
+        }
+
+        private void HmEntityDeath(BaseCombatEntity entity)
+        {
+            foreach (var m in _hms.ToList())
+                for (int t = 0; t < 2; t++)
+                    if (m.Veh[t].Contains(entity as BaseEntity) && m.State == "live")
+                        foreach (var id in m.All) { var p = BasePlayer.FindByID(id); if (p != null) Toast(p, T(id, m.TeamOf(id) == t ? "HmOursDown" : "HmTheirsDown"), m.TeamOf(id) == t); }
+        }
+
+        private bool HmPlayerDeath(BasePlayer victim, HitInfo info)
+        {
+            var m = HmOf(victim);
+            if (m == null) return false;
+            var vid = Id(victim);
+            if (m.State == "live") m.Dead.Add(vid);
+            victim.inventory.Strip();
+            Timer old;
+            if (_respawn.TryGetValue(vid, out old)) old?.Destroy();
+            var pl = victim;
+            _respawn[vid] = timer.Once(_config.Respawn, () => { _respawn.Remove(vid); if (pl != null && pl.IsConnected && pl.IsDead() && HmOf(pl) == m) pl.Respawn(); });
+            return true;
+        }
+
+        private void DrawHmHud(BasePlayer player, HeliMatch m)
+        {
+            var id = Id(player);
+            int t = Mathf.Max(0, m.TeamOf(id));
+            var c = new CuiElementContainer();
+            const float w = 380f;
+            Root(c, UiHud, "Hud", ColHud, "0.5 1", "0.5 1", $"{-w / 2f} -96", $"{w / 2f} -14", 14f, false);
+            Text(c, UiHud, $"{T(id, "Hm_" + m.Fmt).ToUpper()} · {m.Map.Name}" + (m.Ranked ? " · " + T(id, "HmRankedShort") : ""), 10, 0, 6, w, 16, TextAnchor.MiddleCenter, ColDim);
+            int left = Mathf.Max(0, Mathf.CeilToInt(m.Until - Time.realtimeSinceStartup));
+            string phase = m.State == "countdown" ? T(id, "HmStartsIn", left) : m.State == "between" ? T(id, "HmNextIn", left) : T(id, "HmRoundN", m.Round, _config.HmRounds);
+            Text(c, UiHud, phase, 13, 0, 22, w, 20, TextAnchor.MiddleCenter, m.State == "live" ? ColText : ColGold);
+            for (int k = 0; k < 2; k++)
+            {
+                int tt = k == 0 ? t : 1 - t;
+                float x = 12 + k * (w - 24) / 2f, bw = (w - 24) / 2f - 6;
+                Box(c, UiHud, k == 0 ? "1 1 1 0.08" : "0 0 0 0", x, 46, bw, 38, 9f);
+                int alive = m.Teams[tt].Count(id2 => !m.Dead.Contains(id2));
+                int veh = m.Veh[tt].Count(e => e != null && !e.IsDestroyed);
+                Text(c, UiHud, $"<color={TeamHex[tt]}>■</color> {(k == 0 ? T(id, "HmUs") : T(id, "HmThem"))}  <size=18>{m.Score[tt]}</size>", 12, x + 10, 46, bw - 20, 20, TextAnchor.MiddleLeft);
+                Text(c, UiHud, T(id, "HmAliveVeh", alive, veh), 10, x + 10, 64, bw - 20, 16, TextAnchor.MiddleLeft, ColDim, FontReg);
+            }
+            ScaleHud(player, c);
+            var json = c.ToJson();
+            string old;
+            if (_hudJson.TryGetValue(id, out old) && old == json) return;
+            _hudJson[id] = json;
+            CuiHelper.DestroyUi(player, UiHud);
+            CuiHelper.AddUi(player, json);
+        }
+
+        private void OpenHmMenu(BasePlayer player)
+        {
+            var id = Id(player);
+            string fmt; if (!_hmFmt.TryGetValue(id, out fmt)) fmt = "a1";
+            bool ranked = _hmRanked.ContainsKey(id) && _hmRanked[id];
+            const float W = 920f, H = 560f;
+            var c = new CuiElementContainer();
+            Window(c, "H", T(id, "HmTitle"), T(id, "HmSub", _config.HmRounds), W, H);
+            float top = M + 52 + 2 + M;
+            float cw = (W - 2 * M - 2 * G) / 3f;
+            for (int i = 0; i < HmFormats.Length; i++)
+            {
+                var f = HmFormats[i];
+                bool a = f == fmt;
+                float x = M + i * (cw + G);
+                int q = _hmQueue.Where(e => e.Fmt == f).Sum(e => e.Members.Count);
+                Box(c, UiMain, a ? ColWineSoft : ColPanel, x, top, cw, 132, 16f);
+                Box(c, UiMain, "0.48 0.07 0.14 0.45", x + 14, top + 14, 44, 44, 12f);
+                Text(c, UiMain, HmMini(f) ? "M" : f == "a1" ? "1" : "2", 18, x + 14, top + 14, 44, 44, TextAnchor.MiddleCenter, ColRose);
+                Text(c, UiMain, T(id, "Hm_" + f), 15, x + 70, top + 14, cw - 84, 22);
+                Text(c, UiMain, T(id, "HmD_" + f), 10, x + 70, top + 36, cw - 84, 30, TextAnchor.UpperLeft, ColDim, FontReg);
+                int mmr = HmMmr(id, f);
+                Text(c, UiMain, T(id, "HmCardFoot", mmr, q), 11, x + 14, top + 96, cw - 28, 22, TextAnchor.MiddleLeft, ColText);
+                Btn(c, UiMain, "", "mg.ui hm.fmt " + f, "0 0 0 0", 10, x, top, cw, 132, ColText, 0f);
+            }
+            top += 132 + G;
+            // рейтинг вкл/выкл
+            Box(c, UiMain, ColPanel, M, top, W - 2 * M, 56, 14f);
+            Text(c, UiMain, T(id, "HmRankedRow"), 13, M + 16, top, W - 2 * M - 140, 34, TextAnchor.MiddleLeft);
+            Text(c, UiMain, T(id, "HmRankedHint"), 10, M + 16, top + 28, W - 2 * M - 140, 20, TextAnchor.MiddleLeft, ColDim, FontReg);
+            Btn(c, UiMain, ranked ? T(id, "On") : T(id, "Off"), "mg.ui hm.ranked", ranked ? ColWine : ColBtn, 12, W - M - 106, top + 12, 90, 32, ColText, 10f);
+            top += 56 + G;
+            // правила
+            float ph = H - M - 50 - G - top;
+            Box(c, UiMain, ColPanel, M, top, W - 2 * M, ph, 14f);
+            Text(c, UiMain, T(id, "HmRules", _config.HmRounds), 11, M + 16, top + 10, W - 2 * M - 32, ph - 20, TextAnchor.UpperLeft, ColDim, FontReg);
+            float by = H - M - 50;
+            var e0 = HmQueueOf(id);
+            var m0 = HmOf(player);
+            if (m0 != null) Btn(c, UiMain, T(id, "HmSurrender"), "mg.ui leave", ColBtn, 14, M, by, W - 2 * M, 50, ColText, 14f);
+            else if (e0 != null)
+            {
+                int secs = Mathf.FloorToInt(Time.realtimeSinceStartup - e0.Since);
+                Btn(c, UiMain, T(id, "HmSearching", T(id, "Hm_" + e0.Fmt), secs / 60, secs % 60), "mg.ui hm.cancel", ColBtn, 14, M, by, W - 2 * M, 50, ColText, 14f);
+            }
+            else Btn(c, UiMain, T(id, ranked ? "HmFindRanked" : "HmFind"), "mg.ui hm.join", ColWine, 15, M, by, W - 2 * M, 50, ColText, 14f);
+            DestroyWindow(player, UiMain);
+            AddUiScaled(player, c);
+        }
 
         #endregion
 
@@ -1594,6 +2110,31 @@ namespace Oxide.Plugins
 
         private static readonly string[][] Messages =
         {
+            new[] { "On", "ВКЛ", "ON" }, new[] { "Off", "ВЫКЛ", "OFF" },
+            new[] { "HmTitle", "ВЕРТОЛЁТНЫЙ ММ", "HELI MATCHMAKING" }, new[] { "HmSub", "подбор по MMR · раунды до {0} побед · /mg helimm", "MMR matchmaking · first to {0} · /mg helimm" },
+            new[] { "Hm_a1", "Атак-хели 1v1", "Attack heli 1v1" }, new[] { "Hm_a2", "Атак-хели 2v2", "Attack heli 2v2" }, new[] { "Hm_m2", "Мини 2v2 с ракетами", "Mini 2v2 rockets" },
+            new[] { "HmD_a1", "один на один, сам пилот и сам стреляешь ракетами", "one on one, you fly and fire rockets" },
+            new[] { "HmD_a2", "пилот + стрелок у турели, один хели на команду", "pilot + turret gunner, one heli per team" },
+            new[] { "HmD_m2", "пилот + стрелок с самонаводящимися ракетами", "pilot + gunner with homing missiles" },
+            new[] { "HmCardFoot", "MMR {0}   ·   в поиске: {1}", "MMR {0}   ·   searching: {1}" },
+            new[] { "HmRankedRow", "Рейтинговый матч (лестница «Вертолёты» в /ranked)", "Ranked match (Helicopters ladder in /ranked)" },
+            new[] { "HmRankedHint", "Выкл — обычный бой без MMR; вкл — победа и поражение меняют рейтинг.", "Off — casual, no MMR; on — wins and losses change your rating." },
+            new[] { "HmRules", "• Машины стоят на площадках: красные — чётные, синие — нечётные.\n• Отсчёт — садись (E), раунд начинается — можно стрелять.\n• Раунд выигрывает тот, кто сбил все машины соперника или выбил весь экипаж.\n• Матч — до {0} побед в раундах, каждый раунд новые машины.\n• За границей зоны и выше потолка машина теряет ХП.\n• Вышел из матча — техническое поражение команде.", "• Vehicles wait on pads.\n• Board during the countdown, fight when the round starts.\n• Destroy every enemy vehicle or the whole crew to win the round.\n• First to {0} round wins.\n• Leaving the zone or the ceiling damages the vehicle.\n• Leaving the match is a forfeit." },
+            new[] { "HmFind", "ИСКАТЬ БОЙ", "FIND FIGHT" }, new[] { "HmFindRanked", "ИСКАТЬ РЕЙТИНГОВЫЙ БОЙ", "FIND RANKED FIGHT" },
+            new[] { "HmSearching", "Поиск: {0} · {1}:{2:00} — нажми, чтобы отменить", "Searching: {0} · {1}:{2:00} — click to cancel" },
+            new[] { "HmSurrender", "СДАТЬСЯ И ВЫЙТИ", "SURRENDER AND LEAVE" },
+            new[] { "HmInMatch", "Ты уже в вертолётном матче", "You are already in a heli match" }, new[] { "HmAlready", "Ты уже в поиске", "You are already searching" },
+            new[] { "HmNoMap", "Нет карты для вертолётов (/mgadmin create <id> heli)", "No heli map (/mgadmin create <id> heli)" },
+            new[] { "HmPartyBig", "В пати больше {0} — для этого формата слишком много", "Party is bigger than {0}" }, new[] { "HmPartyBusy", "Кто-то из пати уже в поиске или в матче", "Someone in your party is busy" },
+            new[] { "HmQueued", "Поиск: {0}", "Searching: {0}" }, new[] { "HmLeftQueue", "Поиск отменён", "Search cancelled" },
+            new[] { "HmFound", "Бой найден: {0}", "Fight found: {0}" }, new[] { "HmRankedTag", "рейтинговый", "ranked" }, new[] { "HmRankedShort", "рейтинг", "ranked" },
+            new[] { "HmRound", "РАУНД {0}", "ROUND {0}" }, new[] { "HmBoard", "садись в машину — скоро старт", "board your vehicle — starting soon" }, new[] { "HmGo", "В БОЙ!", "FIGHT!" },
+            new[] { "HmStartsIn", "старт раунда через {0}", "round starts in {0}" }, new[] { "HmNextIn", "следующий раунд через {0}", "next round in {0}" }, new[] { "HmRoundN", "раунд {0} · до {1} побед", "round {0} · first to {1}" },
+            new[] { "HmUs", "Мы", "Us" }, new[] { "HmThem", "Они", "Them" }, new[] { "HmAliveVeh", "в строю: {0} · машин: {1}", "alive: {0} · vehicles: {1}" },
+            new[] { "HmRoundWin", "РАУНД ВАШ", "ROUND WON" }, new[] { "HmRoundLose", "РАУНД ПРОИГРАН", "ROUND LOST" }, new[] { "HmDraw", "НИЧЬЯ", "DRAW" },
+            new[] { "HmWin", "ПОБЕДА", "VICTORY" }, new[] { "HmLose", "ПОРАЖЕНИЕ", "DEFEAT" }, new[] { "HmForfeit", "соперник вышел", "opponent left" },
+            new[] { "HmCoins", "вертолётный бой", "heli fight" },
+            new[] { "HmOursDown", "Наша машина сбита!", "Our vehicle is down!" }, new[] { "HmTheirsDown", "Машина соперника сбита!", "Enemy vehicle down!" },
             new[] { "Type_roam", "Роум", "Roam" }, new[] { "Type_heli", "Хели-бои", "Heli battles" }, new[] { "Type_bedwars", "Bedwars", "Bedwars" }, new[] { "Type_raidwars", "Рейд против рейда", "Raid wars" },
             new[] { "Icon_roam", "R", "R" }, new[] { "Icon_heli", "H", "H" }, new[] { "Icon_bedwars", "B", "B" }, new[] { "Icon_raidwars", "W", "W" },
             new[] { "TypeSub_roam", "открытая зона · транспорт · лут с трупов · /mg roam", "open zone · vehicles · loot · /mg roam" },

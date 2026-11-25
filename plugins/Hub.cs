@@ -50,7 +50,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Hub", "Claude", "1.3.1")]
+    [Info("Hub", "Claude", "1.4.0")]
     [Description("Хаб-сервер: табличка, лобби, режимы, порталы, NPC, инвентарь на режим, монеты, профиль")]
     public class Hub : RustPlugin
     {
@@ -210,6 +210,11 @@ namespace Oxide.Plugins
                     Inventory = "kit", Kit = aimKit, AllowPvp = false, OpenChatCommand = "aim" },
                 new ModeCfg { Id = "primitive", Name = "Примитив", NameEn = "Primitive", Desc = "луки, арбалет, Eoka, копья", DescEn = "bows, crossbow, Eoka, spears",
                     Inventory = "empty", Kit = primKit, OpenChatCommand = "arena" },
+                new ModeCfg { Id = "maze", Name = "Лабиринт", NameEn = "Maze", Desc = "ледяные стены · 3 режима", DescEn = "ice walls · 3 modes", Inventory = "empty", OpenChatCommand = "arena" },
+                new ModeCfg { Id = "walls", Name = "Роум со стенами", NameEn = "Wall roams", Desc = "пати на пати · стены", DescEn = "party vs party · walls", Inventory = "empty", OpenChatCommand = "arena" },
+                new ModeCfg { Id = "bows", Name = "FFA луки", NameEn = "FFA bows", Desc = "лук и арбалет", DescEn = "bow & crossbow", Inventory = "empty", OpenChatCommand = "arena" },
+                new ModeCfg { Id = "speargun", Name = "Гарпуны", NameEn = "Spearguns", Desc = "дуэли под водой", DescEn = "underwater duels", Inventory = "empty", OpenChatCommand = "arena" },
+                new ModeCfg { Id = "helimm", Name = "Вертолётный ММ", NameEn = "Heli MM", Desc = "1v1 и 2v2 · атак-хели и мини", DescEn = "1v1 & 2v2 · attack heli & mini", Inventory = "empty", OpenChatCommand = "mg helimm" },
                 new ModeCfg { Id = "heli", Name = "Хели-бои", NameEn = "Heli battles", Desc = "атак-хели · пилот + стрелок", DescEn = "attack heli · pilot + gunner", Inventory = "empty", OpenChatCommand = "mg heli" },
                 new ModeCfg { Id = "roam", Name = "Роум", NameEn = "Roam", Desc = "открытая зона, транспорт", DescEn = "open zone, vehicles", Inventory = "empty", DropLoot = true, OpenChatCommand = "mg roam" },
                 new ModeCfg { Id = "bedwars", Name = "Bedwars", NameEn = "Bedwars", Desc = "острова, кровати, генераторы", DescEn = "islands, beds, generators", Inventory = "empty", OpenChatCommand = "mg bedwars" },
@@ -1598,6 +1603,7 @@ namespace Oxide.Plugins
         {
             { "build", "build" }, { "film", "film" },
             { "ffa", "arena" }, { "duels", "arena" }, { "ranked_ak", "arena" }, { "ranked_mix", "arena" }, { "ranked_t2", "arena" }, { "ranked_prim", "arena" }, { "primitive", "arena" },
+            { "maze", "arena" }, { "walls", "arena" }, { "bows", "arena" }, { "speargun", "arena" },
             { "aim", "aim" }, { "facecheck", "aim" },
         };
 
@@ -1605,6 +1611,7 @@ namespace Oxide.Plugins
         {
             { "build", "build" }, { "film", "film" }, { "ffa", "arena" }, { "duels", "arena" }, { "ranked_ak", "cup" }, { "ranked_mix", "star" }, { "ranked_t2", "cup" }, { "ranked_prim", "flag" },
             { "primitive", "flag" }, { "aim", "aim" }, { "facecheck", "eye" }, { "roam", "map" }, { "heli", "mini" }, { "bedwars", "flag" }, { "raidwars", "build" },
+            { "maze", "layers" }, { "walls", "build" }, { "bows", "flag" }, { "speargun", "eye" }, { "helimm", "mini" },
         };
 
         private readonly Dictionary<ulong, string> _menuPage = new Dictionary<ulong, string>();
@@ -2003,7 +2010,8 @@ namespace Oxide.Plugins
         private static readonly string[][] BuildActions =
         {
             new[] { "BActWindow", "build", "build" }, new[] { "BActPlot", "map", "plot" }, new[] { "BActBp", "layers", "bp" },
-            new[] { "BActFly", "eye", "fly" }, new[] { "BActRaid", "arena", "raidtest" }, new[] { "BActHome", "home", "home" },
+            new[] { "BActFly", "eye", "fly" }, new[] { "BActRaid", "arena", "build raid" }, new[] { "BActHome", "home", "home" },
+            new[] { "BActElec", "sun", "build elec" }, new[] { "BActSpawn", "map", "build spawn" }
         };
 
         private void PageBuild(CuiElementContainer c, BasePlayer player)
@@ -2016,11 +2024,11 @@ namespace Oxide.Plugins
             Box(c, R, "0.62 0.082 0.188 0.094", CX, CY + 172, CW, 38, 11f);
             Text(c, R, inBuild ? T(id, "BuildToolsHere") : T(id, "BuildToolsAway"), 12, CX + 14, CY + 172, CW - 28, 38, TextAnchor.MiddleLeft, "0.804 0.741 0.753 1", FontReg);
             Section(c, R, T(id, "QuickActions"), T(id, "QuickActionsSub"), CX, CY + 222, CW);
-            float cw = (CW - 20) / 3f;
+            float cw = (CW - 30) / 4f;
             for (int i = 0; i < BuildActions.Length; i++)
             {
                 var a = BuildActions[i];
-                float x = CX + (i % 3) * (cw + 10), y = CY + 250 + (i / 3) * 140;
+                float x = CX + (i % 4) * (cw + 10), y = CY + 250 + (i / 4) * 140;
                 Panel(c, R, x, y, cw, 130);
                 TileIcon(c, R, a[1], x + 16, y + 16);
                 Text(c, R, T(id, a[0]), 16, x + 66, y + 16, cw - 82, 20, TextAnchor.MiddleLeft, MInk);
@@ -2115,7 +2123,7 @@ namespace Oxide.Plugins
             y += 46;
 
             var list = ModesOf("arena").Where(m =>
-                tab == "all" || (tab == "ffa" && (m.Id == "ffa" || m.Id == "primitive")) || (tab == "ranked" && m.Id.StartsWith("ranked")) || (tab == "duels" && m.Id == "duels")).ToList();
+                (tab == "all" && !m.Id.StartsWith("ranked")) || (tab == "ffa" && (m.Id == "ffa" || m.Id == "primitive" || m.Id == "maze" || m.Id == "walls" || m.Id == "bows")) || (tab == "ranked" && m.Id.StartsWith("ranked")) || (tab == "duels" && (m.Id == "duels" || m.Id == "speargun"))).ToList();
             int cols = list.Count > 6 || (tab == "ranked" && list.Count > 3) ? 4 : 3;
             float cw = (CW - 10 * (cols - 1)) / cols, ch = 182f;
             int maxRows = Mathf.Max(1, Mathf.FloorToInt((MH - 52 - y + 10) / (ch + 10)));
@@ -2833,7 +2841,7 @@ namespace Oxide.Plugins
             new[] { "BActPlotSub", "занять, отдать, позвать друга", "claim, release, add a friend" },
             new[] { "BActBpSub", "библиотека построек", "library of builds" },
             new[] { "BActFlySub", "включить или выключить", "toggle on or off" },
-            new[] { "BActRaidSub", "снимок базы и проверка рейда", "snapshot your base and raid it" },
+            new[] { "BActRaidSub", "откат, друг рейдит, путь до ТШ", "rollback, friend raid, path to TC" },
             new[] { "BActHomeSub", "на точку /sethome", "to your /sethome spot" },
             new[] { "EnterMode", "Войти: {0}", "Enter: {0}" },
             new[] { "FilmHeroCap", "Студия VideoRecorder", "VideoRecorder studio" },
@@ -2866,7 +2874,7 @@ namespace Oxide.Plugins
             new[] { "AimCap", "Личная тренировка", "Personal training" },
             new[] { "AimTitle", "Чище прицел. Быстрее реакция.", "Cleaner aim. Faster reactions." },
             new[] { "AimSub", "Мишени, боты, зеркало и фейсчеки — с бесконечными патронами.", "Targets, bots, mirror and facechecks — with infinite ammo." },
-            new[] { "AimFoot_aim", "мишени · боты · зеркало · результаты", "targets · bots · mirror · results" },
+            new[] { "AimFoot_aim", "мишени · Aim Flow · лук · зеркало", "targets · Aim Flow · bow · mirror" },
             new[] { "AimFoot_facecheck", "дверь по таймеру · игрок или бот", "timed door · player or bot" },
             new[] { "YourShooting", "Твоя стрельба", "Your shooting" },
             new[] { "Accuracy", "точность на аренах", "arena accuracy" },
@@ -2890,6 +2898,14 @@ namespace Oxide.Plugins
             new[] { "Rules_ranked_ak", "Рейтинговые матчи с АК, от 1v1 до 5v5", "Ranked AK matches, 1v1 to 5v5" },
             new[] { "Rules_ranked_mix", "Случайное оружие и набор каждый раунд", "Random gun and kit every round" },
             new[] { "Rules_ranked_t2", "Томпсон, MP5 или SAR и дорожная броня", "Thompson, MP5 or SAR with roadsign armor" },
+            new[] { "Rules_maze", "Лабиринт из ледяных стен, каждый раунд новый", "Ice-wall maze, new every round" },
+            new[] { "Rules_walls", "Пати на пати среди больших стен", "Party vs party among high walls" },
+            new[] { "Rules_bows", "Лук и арбалет, все против всех", "Bow and crossbow, free for all" },
+            new[] { "Rules_speargun", "Гарпуны и водолазный сет", "Spearguns and diving gear" },
+            new[] { "Rules_helimm", "1v1 / 2v2, до 3 побед, рейтинг в /ranked", "1v1 / 2v2, first to 3, rated in /ranked" },
+            new[] { "BActElec", "Электрика", "Electricity" }, new[] { "BActElecSub", "схемы, копия, нагрузка", "circuits, copy, power view" },
+            new[] { "BActSpawn", "Спавн", "Spawn" }, new[] { "BActSpawnSub", "деревья, руда, ящики, турели", "trees, ore, crates, turrets" },
+            new[] { "BActZone", "PvP на участке", "Plot PvP" }, new[] { "BActZoneSub", "включи бой на своём участке", "enable fights on your plot" },
             new[] { "Rules_ranked_prim", "Луки, арбалет, Eoka и револьвер", "Bows, crossbow, Eoka and revolver" },
             new[] { "Rules_primitive", "Копья, луки и арбалеты", "Spears, bows and crossbows" },
             new[] { "Rules_aim", "Тренировка без урона по игрокам", "Practice with no player damage" },

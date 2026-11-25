@@ -26,7 +26,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("AimTrain", "Claude", "1.2.0")]
+    [Info("AimTrain", "Claude", "1.3.0")]
     [Description("Аим-трен: мишени, стрейферы, стрелки, бот-зеркало; фейсчеки против игрока и бота")]
     public class AimTrain : RustPlugin
     {
@@ -166,7 +166,7 @@ namespace Oxide.Plugins
                 new WeaponOpt { Item = "weapon.mod.holosight", Name = "Голо" }, new WeaponOpt { Item = "weapon.mod.small.scope", Name = "8x" },
                 new WeaponOpt { Item = "weapon.mod.silencer", Name = "Глушитель" }, new WeaponOpt { Item = "weapon.mod.lasersight", Name = "Лазер" },
             };
-            [JsonProperty("Версия конфига")] public int ConfigVersion = 2;
+            [JsonProperty("Версия конфига")] public int ConfigVersion = 3;
             [JsonProperty("Дистанции (м)")] public List<int> Distances = new List<int> { 10, 50, 100, 150, 200, 250 };
             [JsonProperty("Рисунок очереди: показывать после очереди от (выстрелов)")] public int SprayMinShots = 3;
             [JsonProperty("Рисунок очереди: держать на экране (сек)")] public float SprayShow = 4f;
@@ -178,6 +178,15 @@ namespace Oxide.Plugins
                 ["hqm"] = new List<string> { "metal.facemask", "metal.plate.torso", "roadsign.kilt", "hoodie", "pants" },
                 ["heavy"] = new List<string> { "heavy.plate.helmet", "heavy.plate.jacket", "heavy.plate.pants" },
             };
+            [JsonProperty("Лук: оружие")] public List<WeaponOpt> BowWeapons = new List<WeaponOpt>
+            {
+                new WeaponOpt { Item = "bow.hunting", Name = "Лук" }, new WeaponOpt { Item = "crossbow", Name = "Арбалет" },
+                new WeaponOpt { Item = "bow.compound", Name = "Блочный" },
+            };
+            [JsonProperty("Лук: дистанции (м)")] public List<int> BowDistances = new List<int> { 10, 20, 30, 50, 70 };
+            [JsonProperty("Лук: скорость мишеней (доля от сложности)")] public float BowSpeed = 0.45f;
+            [JsonProperty("Aim Flow: глубина рывков вперёд-назад (м)")] public float FlowDepth = 3f;
+            [JsonProperty("Aim Flow: шанс серии ADAD")] public float FlowAdad = 0.25f;
             [JsonProperty("Максимум ботов")] public int MaxBots = 6;
             [JsonProperty("Ширина дорожки по умолчанию (м)")] public float LaneWidth = 14f;
             [JsonProperty("Новый бот после убийства через (сек)")] public float BotRespawn = 0.6f;
@@ -216,6 +225,15 @@ namespace Oxide.Plugins
                     _config.ConfigVersion = 2;
                     PrintWarning("Конфиг обновлён до 1.2: дистанции до 250 м, броня ботов на выбор");
                 }
+                if (_config.ConfigVersion < 3)
+                {
+                    // 1.3: Aim Flow и мишени для лука
+                    _config.ConfigVersion = 3;
+                    PrintWarning("Конфиг обновлён до 1.3: Aim Flow, режим лука");
+                }
+                var def = new Configuration();
+                if (_config.BowWeapons == null || _config.BowWeapons.Count == 0) _config.BowWeapons = def.BowWeapons;
+                if (_config.BowDistances == null || _config.BowDistances.Count == 0) _config.BowDistances = def.BowDistances;
                 if (_config.ArmorSets == null || _config.ArmorSets.Count == 0) _config.ArmorSets = new Configuration().ArmorSets;
             }
             catch
@@ -313,7 +331,7 @@ namespace Oxide.Plugins
         // настройки, которые игрок выбирает в меню
         private class Prefs
         {
-            public string Mode = "strafers";       // targets | strafers | shooters | mirror | fcbot
+            public string Mode = "strafers";       // targets | strafers | flow | shooters | mirror | bow | fcbot
             public int Diff = 1;
             public int Dist = 30;                  // 0 = микс
             public int Bots = 3;
@@ -464,12 +482,31 @@ namespace Oxide.Plugins
 
             player.Teleport(lane.Stand.V + Vector3.up * 0.1f);
             Heal(player);
-            GiveWeapon(player, p.Weapon, p.Mods.ToList(), new List<string>());
+            FixWeapon(p);
+            GiveWeapon(player, p.Weapon, p.Mode == "bow" ? new List<string>() : p.Mods.ToList(), new List<string>());
+            if (p.Mode == "bow") GiveArrows(player, p.Weapon);
 
             int n = p.Mode == "mirror" ? 1 : Mathf.Clamp(p.Bots, 1, _config.MaxBots);
             for (int i = 0; i < n; i++) SpawnAimBot(s, i, n);
             DrawHud(s);
             Center(player, T(id, "Go_" + p.Mode), ColRose, 2f);
+        }
+
+        private bool IsBow(string item) => _config.BowWeapons.Any(w => w.Item == item);
+
+        // в режиме лука — только лук/арбалет, в остальных — только огнестрел
+        private void FixWeapon(Prefs p)
+        {
+            if (p.Mode == "bow") { if (!IsBow(p.Weapon)) p.Weapon = _config.BowWeapons[0].Item; }
+            else if (IsBow(p.Weapon)) p.Weapon = _config.Weapons.Count > 0 ? _config.Weapons[0].Item : "rifle.ak";
+            var dists = p.Mode == "bow" ? _config.BowDistances : _config.Distances;
+            if (p.Dist != 0 && !dists.Contains(p.Dist)) p.Dist = dists[Mathf.Min(1, dists.Count - 1)];
+        }
+
+        private static void GiveArrows(BasePlayer player, string weapon)
+        {
+            var ammo = ItemManager.CreateByName(weapon == "crossbow" ? "arrow.wooden" : "arrow.wooden", 64, 0UL);
+            if (ammo != null && !ammo.MoveToContainer(player.inventory.containerMain)) ammo.Remove();
         }
 
         private void StopAim(BasePlayer player, bool showResult)
@@ -513,7 +550,8 @@ namespace Oxide.Plugins
         private Vector3 AnchorFor(AimSession s, int index, int count, out float lateral)
         {
             var lane = s.Lane;
-            int dist = s.P.Dist > 0 ? s.P.Dist : _config.Distances[UnityEngine.Random.Range(0, _config.Distances.Count)];
+            var pool = s.P.Mode == "bow" ? _config.BowDistances : _config.Distances;
+            int dist = s.P.Dist > 0 ? s.P.Dist : pool[UnityEngine.Random.Range(0, pool.Count)];
             float w = Mathf.Max(4f, lane.Width);
             lateral = count <= 1 ? 0f : -w / 2f + w * index / (count - 1);
             lateral += UnityEngine.Random.Range(-1.5f, 1.5f);
@@ -627,6 +665,8 @@ namespace Oxide.Plugins
             private float _half, _lat, _dir = 1f, _nextSwitch, _jumpStart = -10f, _crouchUntil, _lastSend, _nextFire, _seenSince = -1f;
             private bool _frozen;
             private float _reactOverride = -1f;
+            // Aim Flow
+            private float _flowT, _flowK = 1f, _adadUntil;
 
             // зеркало
             private bool _mirror, _mirrorShoots;
@@ -670,16 +710,40 @@ namespace Oxide.Plugins
                     pos = _anchor + _right * _lat + Vector3.up * Mathf.Max(0f, use.y);
                     flags = f;
                 }
-                else if (!_frozen && (_mode == "strafers" || _mode == "shooters" || _mode == "fcbot"))
+                else if (!_frozen && _mode == "flow")
+                {
+                    // Aim Flow: бот всё время в движении — плавные дуги, рывки вперёд-назад, серии ADAD, прыжки и присед
+                    _flowT += Time.deltaTime * _d.Speed * 0.32f * (now < _adadUntil ? 2.6f : 1f);
+                    if (now >= _nextSwitch)
+                    {
+                        _nextSwitch = now + UnityEngine.Random.Range(_d.SwitchMin, _d.SwitchMax) * 1.6f;
+                        _flowK = UnityEngine.Random.Range(0.6f, 1.5f);
+                        if (UnityEngine.Random.value < _pl._config.FlowAdad) _adadUntil = now + UnityEngine.Random.Range(0.6f, 1.4f);
+                        if (UnityEngine.Random.value < _d.Jump + 0.1f) _jumpStart = now;
+                        else if (UnityEngine.Random.value < _d.Crouch + 0.05f) _crouchUntil = now + UnityEngine.Random.Range(0.3f, 0.8f);
+                    }
+                    float lat = now < _adadUntil
+                        ? _lat + Mathf.Sin(_flowT * 9f) * 0.9f
+                        : Mathf.Sin(_flowT * _flowK) * _half * 0.85f + Mathf.Sin(_flowT * 2.3f) * _half * 0.15f;
+                    if (now >= _adadUntil) _lat = lat;
+                    float depth = Mathf.Sin(_flowT * 0.7f + 1.3f) * _pl._config.FlowDepth;
+                    var fwd = new Vector3(-_right.z, 0f, _right.x);
+                    float jt = now - _jumpStart;
+                    float jy = jt >= 0f && jt < 0.55f ? 4.2f * jt - 7.6f * jt * jt : 0f;
+                    pos = _anchor + _right * Mathf.Clamp(lat, -_half, _half) + fwd * depth + Vector3.up * Mathf.Max(0f, jy);
+                    if (jy > 0.02f) flags = FlagJumped;
+                    if (now < _crouchUntil) flags |= FlagDucked;
+                }
+                else if (!_frozen && (_mode == "strafers" || _mode == "shooters" || _mode == "fcbot" || _mode == "bow"))
                 {
                     if (now >= _nextSwitch)
                     {
                         _dir = -_dir;
                         _nextSwitch = now + UnityEngine.Random.Range(_d.SwitchMin, _d.SwitchMax);
-                        if (UnityEngine.Random.value < _d.Jump) _jumpStart = now;
+                        if (_mode != "bow" && UnityEngine.Random.value < _d.Jump) _jumpStart = now;
                         else if (UnityEngine.Random.value < _d.Crouch) _crouchUntil = now + UnityEngine.Random.Range(0.3f, 0.9f);
                     }
-                    float speed = _d.Speed * (now < _crouchUntil ? 0.45f : 1f);
+                    float speed = _d.Speed * (now < _crouchUntil ? 0.45f : 1f) * (_mode == "bow" ? _pl._config.BowSpeed : 1f);
                     _lat += _dir * speed * Time.deltaTime;
                     if (_lat > _half) { _lat = _half; _dir = -1f; }
                     if (_lat < -_half) { _lat = -_half; _dir = 1f; }
@@ -1188,7 +1252,7 @@ namespace Oxide.Plugins
                 case "set":
                     switch (a1)
                     {
-                        case "mode": p.Mode = a2; break;
+                        case "mode": if (AimModes.Contains(a2)) { p.Mode = a2; FixWeapon(p); } break;
                         case "diff": p.Diff = Mathf.Clamp(int.Parse(a2), 0, _config.Diffs.Count - 1); break;
                         case "dist": p.Dist = int.Parse(a2); break;
                         case "armor": if (a2 == "auto" || _config.ArmorSets.ContainsKey(a2)) p.Armor = a2; break;
@@ -1384,7 +1448,7 @@ namespace Oxide.Plugins
 
         #region Интерфейс: меню аим-трена
 
-        private static readonly string[] AimModes = { "targets", "strafers", "shooters", "mirror", "fcbot" };
+        private static readonly string[] AimModes = { "targets", "strafers", "flow", "shooters", "mirror", "bow", "fcbot" };
 
         private void OpenAimMenu(BasePlayer player)
         {
@@ -1396,8 +1460,8 @@ namespace Oxide.Plugins
             var R = UiMain;
             float top = M + 52 + 2 + M;
 
-            // 5 режимов
-            float mw = (W - 2 * M - 4 * G) / 5f;
+            // 7 режимов
+            float mw = (W - 2 * M - (AimModes.Length - 1) * G) / AimModes.Length;
             for (int i = 0; i < AimModes.Length; i++)
             {
                 var m = AimModes[i];
@@ -1430,7 +1494,7 @@ namespace Oxide.Plugins
             else
             {
                 Text(c, R, T(id, "Distance"), 10, M + 14, y, iw, 16, TextAnchor.MiddleLeft, ColDim); y += 22;
-                var dists = _config.Distances.Select(d => new[] { d.ToString(), d + " м", "aim.ui set dist " + d }).ToList();
+                var dists = (p.Mode == "bow" ? _config.BowDistances : _config.Distances).Select(d => new[] { d.ToString(), d + " м", "aim.ui set dist " + d }).ToList();
                 dists.Add(new[] { "0", T(id, "Mix"), "aim.ui set dist 0" });
                 Seg(c, R, M + 14, y, iw, 32, dists, p.Dist.ToString()); y += 44;
                 Text(c, R, T(id, "BotArmor"), 10, M + 14, y, iw, 16, TextAnchor.MiddleLeft, ColDim); y += 22;
@@ -1467,20 +1531,23 @@ namespace Oxide.Plugins
             y = top + 10;
             Text(c, R, T(id, "Weapon"), 10, rx + 14, y, iw, 16, TextAnchor.MiddleLeft, ColDim); y += 22;
             float ww = (iw - 3 * 6f) / 4f;
-            for (int i = 0; i < _config.Weapons.Count && i < 12; i++)
+            var wlist = p.Mode == "bow" ? _config.BowWeapons : _config.Weapons;
+            for (int i = 0; i < wlist.Count && i < 12; i++)
             {
-                var wpn = _config.Weapons[i];
+                var wpn = wlist[i];
                 Btn(c, R, wpn.Name, "aim.ui set weapon " + wpn.Item, p.Weapon == wpn.Item ? ColWine : ColBtn, 11, rx + 14 + (i % 4) * (ww + 6), y + (i / 4) * 38, ww, 32, ColText, 10f);
             }
-            y += Mathf.CeilToInt(Mathf.Min(12, _config.Weapons.Count) / 4f) * 38 + 10;
-            Text(c, R, T(id, "Mods"), 10, rx + 14, y, iw, 16, TextAnchor.MiddleLeft, ColDim); y += 22;
-            for (int i = 0; i < _config.Mods.Count && i < 8; i++)
+            y += Mathf.CeilToInt(Mathf.Min(12, wlist.Count) / 4f) * 38 + 10;
+            if (p.Mode != "bow") Text(c, R, T(id, "Mods"), 10, rx + 14, y, iw, 16, TextAnchor.MiddleLeft, ColDim);
+            else Text(c, R, T(id, "BowHint"), 11, rx + 14, y, iw, 36, TextAnchor.UpperLeft, ColDim, FontReg);
+            y += 22;
+            for (int i = 0; i < _config.Mods.Count && i < 8 && p.Mode != "bow"; i++)
             {
                 var mod = _config.Mods[i];
                 Btn(c, R, mod.Name, "aim.ui set mod " + mod.Item, p.Mods.Contains(mod.Item) ? ColWine : ColBtn, 11, rx + 14 + (i % 4) * (ww + 6), y + (i / 4) * 38, ww, 32, ColText, 10f);
             }
             y += Mathf.CeilToInt(Mathf.Min(8, _config.Mods.Count) / 4f) * 38 + 10;
-            Text(c, R, T(id, "InfiniteAmmo"), 11, rx + 14, y, iw, 18, TextAnchor.MiddleLeft, ColDim, FontReg);
+            if (p.Mode != "bow") Text(c, R, T(id, "InfiniteAmmo"), 11, rx + 14, y, iw, 18, TextAnchor.MiddleLeft, ColDim, FontReg);
 
             bool running = _aim.ContainsKey(id);
             float by = H - M - 48, bw = (W - 2 * M - G) / 2f;
@@ -1757,6 +1824,11 @@ namespace Oxide.Plugins
             new[] { "AimTitle", "АИМ-ТРЕН", "AIM TRAIN" }, new[] { "AimSub", "любое оружие · бесконечные патроны · /aim", "any weapon · infinite ammo · /aim" },
             new[] { "M_targets", "Мишени", "Targets" }, new[] { "MD_targets", "стоят на дистанциях", "standing at range" }, new[] { "MIcon_targets", "T", "T" },
             new[] { "M_strafers", "Стрейферы", "Strafers" }, new[] { "MD_strafers", "бегают и прыгают", "run and jump" }, new[] { "MIcon_strafers", "S", "S" },
+            new[] { "M_flow", "Aim Flow", "Aim Flow" }, new[] { "MD_flow", "всегда в движении", "always moving" }, new[] { "MIcon_flow", "~", "~" },
+            new[] { "Go_flow", "Aim Flow: веди прицел!", "Aim Flow: track them!" },
+            new[] { "M_bow", "Лук", "Bow" }, new[] { "MD_bow", "лук и арбалет", "bow & crossbow" }, new[] { "MIcon_bow", "B", "B" },
+            new[] { "Go_bow", "Мишени для лука готовы", "Bow targets ready" },
+            new[] { "BowHint", "Стрелы бесконечные. Учитывай падение стрелы на дистанции.", "Infinite arrows. Mind the arrow drop at range." },
             new[] { "M_shooters", "Стреляют в ответ", "Shoot back" }, new[] { "MD_shooters", "убей первым", "kill first" }, new[] { "MIcon_shooters", "!", "!" },
             new[] { "M_mirror", "Бот-зеркало", "Mirror bot" }, new[] { "MD_mirror", "повторяет тебя", "copies you" }, new[] { "MIcon_mirror", "M", "M" },
             new[] { "M_fcbot", "Фейсчек с ботом", "Facecheck vs bot" }, new[] { "MD_fcbot", "дверь по таймеру", "timed door" }, new[] { "MIcon_fcbot", "F", "F" },

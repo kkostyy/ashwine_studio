@@ -27,7 +27,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Arenas", "Claude", "1.2.0")]
+    [Info("Arenas", "Claude", "1.3.0")]
     [Description("FFA, TDM, ган-гейм, дуэли и свои арены с экраном смерти, киллфидом и статистикой")]
     public class Arenas : RustPlugin
     {
@@ -150,7 +150,14 @@ namespace Oxide.Plugins
 
         private class Configuration
         {
-            [JsonProperty("Версия конфига")] public int ConfigVersion = 2;
+            [JsonProperty("Версия конфига")] public int ConfigVersion = 3;
+            [JsonProperty("Лабиринт: префаб стены")] public string MazePrefab = "assets/prefabs/misc/xmas/icewalls/icewall.prefab";
+            [JsonProperty("Лабиринт: ширина одной стены (м)")] public float MazeWallWidth = 6f;
+            [JsonProperty("Лабиринт: размер клетки (м)")] public float MazeCell = 6f;
+            [JsonProperty("Лабиринт: доля лишних проходов (петли для FFA)")] public float MazeLoops = 0.12f;
+            [JsonProperty("Лабиринт: FFA — новый лабиринт каждые (мин)")] public float MazeRegenMin = 5f;
+            [JsonProperty("Роум: префаб большой стены")] public string RoamPrefab = "assets/prefabs/building/wall.external.high.stone/wall.external.high.stone.prefab";
+            [JsonProperty("Роум: стен на арене")] public int RoamWalls = 26;
             [JsonProperty("Возрождение после смерти (сек)")] public float RespawnDelay = 1.5f;
             [JsonProperty("За убийство: восстановить здоровье (FFA, TDM, ган-гейм)")] public bool KillHeal = true;
             [JsonProperty("За убийство: сколько ХП (0 = полностью)")] public float KillHealAmount = 0f;
@@ -203,6 +210,10 @@ namespace Oxide.Plugins
                     new[] { B("spear.wooden"), B("bow.hunting"), B("crossbow"), B("pistol.eoka"), B("pistol.revolver"), Mn("arrow.wooden", 64), Mn("ammo.handmade.shell", 32), Mn("ammo.pistol", 64) }),
                 L("tier2", "Тир 2: Томпсон / MP5 / SAR", "роадсайн · 2 шприца · 3 бинта", roadsign,
                     new[] { B("smg.thompson", 1, "weapon.mod.holosight"), B("smg.mp5"), B("rifle.semiauto"), Mn("ammo.pistol", 256), Mn("ammo.rifle", 128) }),
+                L("bows", "Луки: лук + арбалет", "шкурный сет · стрелы", new KitEntry[] { W("deer.skull.mask"), W("hide.poncho"), W("hide.pants"), W("hide.boots") },
+                    new[] { B("bow.hunting"), B("crossbow"), Mn("arrow.wooden", 64), Mn("arrow.hv", 32) }),
+                L("speargun", "Гарпуны", "водолазный сет · бой в воде", new KitEntry[] { W("diving.mask"), W("diving.tank"), W("diving.fins"), W("diving.wetsuit") },
+                    new[] { B("speargun"), Mn("speargun.spear", 32) }),
                 L("tier3", "Тир 3: AK / LR / M249", "МВК-сет · 2 шприца · 3 бинта", hqm,
                     new[] { B("rifle.ak", 1, "weapon.mod.holosight"), B("rifle.lr300"), B("lmg.m249"), Mn("ammo.rifle", 400) }),
             };
@@ -254,6 +265,13 @@ namespace Oxide.Plugins
                     _config.ConfigVersion = 2;
                     PrintWarning("Конфиг обновлён до 1.2: примитив с Eoka и револьвером, наборы «Тир 2» и «Тир 3», возрождение 1.5 с");
                 }
+                if (_config.ConfigVersion < 3)
+                {
+                    // 1.3: наборы «Луки» и «Гарпуны», лабиринт и роум
+                    foreach (var l in DefaultLoadouts()) if (!_config.Loadouts.Any(x => x.Id == l.Id)) _config.Loadouts.Add(l);
+                    _config.ConfigVersion = 3;
+                    PrintWarning("Конфиг обновлён до 1.3: наборы «Луки» и «Гарпуны», лабиринт и роум");
+                }
             }
             catch
             {
@@ -291,6 +309,8 @@ namespace Oxide.Plugins
             public bool Template;
             public bool Barricades;
             public string Size = "small";            // small — тесная арена, large — открытая местность с баррикадами
+            public string Layout = "none";           // none | maze — лабиринт из ледяных стен | roam — большие стены
+            public int MazeSize = 9;                 // клеток по стороне
             public bool Enabled = true;
             public Pt Center;
             public List<Pt> Spawns = new List<Pt>();
@@ -385,6 +405,10 @@ namespace Oxide.Plugins
             public float EmptySince;
 
             public List<BaseEntity> Built = new List<BaseEntity>();
+            // лабиринт / роум: стены и точки появления, пересоздаются каждый раунд
+            public List<BaseEntity> LayoutEnts = new List<BaseEntity>();
+            public List<Pt> LAll = new List<Pt>(), LA = new List<Pt>(), LB = new List<Pt>();
+            public float NextRegen;
             public string Tag;                       // матч турнира (Social)
         }
 
@@ -494,6 +518,7 @@ namespace Oxide.Plugins
             s = new Session { Id = a.Id, Arena = a, Kind = a.Kind, Loadout = LoadoutById(a.Loadout) };
             if (a.Kind == "gungame") NewLadder(s);
             _sessions[a.Id] = s;
+            BuildLayout(s);
             return s;
         }
 
@@ -506,7 +531,7 @@ namespace Oxide.Plugins
             {
                 ArenaDef a;
                 if (!_data.Arenas.TryGetValue(sessionOrArena, out a) || !a.Enabled || a.Kind == "match") { Toast(player, T(id, "NoArena"), true); return; }
-                if (Spawns(a, -1).Count == 0 && (a.Kind != "tdm" || a.SpawnsA.Count == 0)) { Toast(player, T(id, "NoSpawns", a.Name), true); return; }
+                if (a.Layout != "maze" && Spawns(a, -1).Count == 0 && (a.Kind != "tdm" || a.SpawnsA.Count == 0)) { Toast(player, T(id, "NoSpawns", a.Name), true); return; }
                 s = GetOrCreatePublic(a);
             }
 
@@ -617,7 +642,7 @@ namespace Oxide.Plugins
         private Pt PickSpawn(Session s, ulong id)
         {
             int team = s.Team.ContainsKey(id) ? s.Team[id] : -1;
-            var list = Spawns(s.Arena, s.Kind == "tdm" || s.Kind == "match" ? team : -1);
+            var list = SpawnsFor(s, s.Kind == "tdm" || s.Kind == "match" ? team : -1);
             if (list.Count == 0) return null;
             var enemies = s.Players.Where(p => p != id && (team < 0 || !s.Team.ContainsKey(p) || s.Team[p] != team))
                 .Select(BasePlayer.FindByID).Where(p => p != null && !p.IsDead()).Select(p => p.transform.position).ToList();
@@ -644,7 +669,7 @@ namespace Oxide.Plugins
         {
             var id = Id(player);
             int team = s.Team.ContainsKey(id) ? s.Team[id] : 0;
-            var list = Spawns(s.Arena, team);
+            var list = SpawnsFor(s, team);
             if (list.Count == 0) return;
             int idx = s.Players.Where(p => s.Team.ContainsKey(p) && s.Team[p] == team).ToList().IndexOf(id);
             var pt = list[Mathf.Clamp(idx, 0, list.Count - 1) % list.Count];
@@ -1054,6 +1079,7 @@ namespace Oxide.Plugins
             s.State = "countdown";
             s.Alive.Clear();
             CleanupBuilt(s);
+            BuildLayout(s);
             foreach (var id in s.Players.ToList())
             {
                 var p = BasePlayer.FindByID(id);
@@ -1181,6 +1207,179 @@ namespace Oxide.Plugins
         {
             foreach (var e in s.Built) if (e != null && !e.IsDestroyed) e.Kill();
             s.Built.Clear();
+            foreach (var e in s.LayoutEnts) if (e != null && !e.IsDestroyed) e.Kill();
+            s.LayoutEnts.Clear();
+            s.LAll.Clear(); s.LA.Clear(); s.LB.Clear();
+        }
+
+        #endregion
+
+        #region Лабиринт и роум
+
+        private List<Pt> SpawnsFor(Session s, int team)
+        {
+            if (s.LAll.Count > 0)
+            {
+                if (team == 0 && s.LA.Count > 0) return s.LA;
+                if (team == 1 && s.LB.Count > 0) return s.LB;
+                return s.LAll;
+            }
+            return Spawns(s.Arena, team);
+        }
+
+        private BaseEntity PlaceWall(Session s, string prefab, Vector3 pos, float yaw)
+        {
+            RaycastHit hit;
+            if (Physics.Raycast(pos + Vector3.up * 20f, Vector3.down, out hit, 60f, LayerMask.GetMask("Terrain", "World"), QueryTriggerInteraction.Ignore)) pos = hit.point;
+            var e = GameManager.server.CreateEntity(prefab, pos, Quaternion.Euler(0f, yaw, 0f));
+            if (e == null) return null;
+            e.enableSaving = false;
+            e.Spawn();
+            s.LayoutEnts.Add(e);
+            return e;
+        }
+
+        // стенка вдоль ребра клетки, длина = клетка, из нескольких секций если надо
+        private void EdgeWall(Session s, Vector3 a, Vector3 b)
+        {
+            float len = Vector3.Distance(a, b), ww = Mathf.Max(1f, _config.MazeWallWidth);
+            int n = Mathf.Max(1, Mathf.CeilToInt(len / ww - 0.01f));
+            var dir = (b - a) / len;
+            float yaw = Mathf.Atan2(dir.x, dir.z) * Mathf.Rad2Deg - 90f;
+            for (int i = 0; i < n; i++) PlaceWall(s, _config.MazePrefab, a + dir * (len * (i + 0.5f) / n), yaw);
+        }
+
+        private void BuildLayout(Session s)
+        {
+            var a = s.Arena;
+            foreach (var e in s.LayoutEnts) if (e != null && !e.IsDestroyed) e.Kill();
+            s.LayoutEnts.Clear(); s.LAll.Clear(); s.LA.Clear(); s.LB.Clear();
+            if (a == null || a.Center == null || a.Layout == "none") return;
+            try
+            {
+                if (a.Layout == "maze") BuildMaze(s);
+                else if (a.Layout == "roam") BuildRoam(s);
+            }
+            catch (Exception ex) { PrintWarning($"Арена {a.Id}: не удалось построить {a.Layout}: {ex.Message}"); }
+            if (a.Layout == "maze" && s.Kind != "match") s.NextRegen = Time.realtimeSinceStartup + Mathf.Max(1f, _config.MazeRegenMin) * 60f;
+        }
+
+        // лабиринт «обходом в глубину» + немного лишних проходов, чтобы в FFA были петли
+        private void BuildMaze(Session s)
+        {
+            var a = s.Arena;
+            int n = Mathf.Clamp(a.MazeSize, 4, 16);
+            float c = Mathf.Max(3f, _config.MazeCell);
+            var o = a.Center.V - new Vector3(n * c / 2f, 0f, n * c / 2f);
+            // стены: east[x,z] — между (x,z) и (x+1,z); north[x,z] — между (x,z) и (x,z+1)
+            var east = new bool[n, n]; var north = new bool[n, n];
+            for (int x = 0; x < n; x++) for (int z = 0; z < n; z++) { east[x, z] = true; north[x, z] = true; }
+            var seen = new bool[n, n];
+            var stack = new Stack<int>();
+            int sx = UnityEngine.Random.Range(0, n), sz = UnityEngine.Random.Range(0, n);
+            seen[sx, sz] = true; stack.Push(sx * n + sz);
+            var dirs = new List<int>();
+            while (stack.Count > 0)
+            {
+                int cur = stack.Peek(), x = cur / n, z = cur % n;
+                dirs.Clear();
+                if (x + 1 < n && !seen[x + 1, z]) dirs.Add(0);
+                if (x - 1 >= 0 && !seen[x - 1, z]) dirs.Add(1);
+                if (z + 1 < n && !seen[x, z + 1]) dirs.Add(2);
+                if (z - 1 >= 0 && !seen[x, z - 1]) dirs.Add(3);
+                if (dirs.Count == 0) { stack.Pop(); continue; }
+                int d = dirs[UnityEngine.Random.Range(0, dirs.Count)];
+                int nx = x, nz = z;
+                if (d == 0) { east[x, z] = false; nx = x + 1; }
+                else if (d == 1) { east[x - 1, z] = false; nx = x - 1; }
+                else if (d == 2) { north[x, z] = false; nz = z + 1; }
+                else { north[x, z - 1] = false; nz = z - 1; }
+                seen[nx, nz] = true; stack.Push(nx * n + nz);
+            }
+            // петли: в FFA и командном бою больше проходов, в дуэли — классический лабиринт
+            float loops = s.Kind == "match" && s.TeamSize <= 1 ? 0f : _config.MazeLoops;
+            for (int x = 0; x < n; x++) for (int z = 0; z < n; z++)
+            {
+                if (x + 1 < n && east[x, z] && UnityEngine.Random.value < loops) east[x, z] = false;
+                if (z + 1 < n && north[x, z] && UnityEngine.Random.value < loops) north[x, z] = false;
+            }
+            Func<int, int, Vector3> P = (x, z) => o + new Vector3(x * c, 0f, z * c);
+            // рамка
+            for (int i = 0; i < n; i++)
+            {
+                EdgeWall(s, P(i, 0), P(i + 1, 0));
+                EdgeWall(s, P(i, n), P(i + 1, n));
+                EdgeWall(s, P(0, i), P(0, i + 1));
+                EdgeWall(s, P(n, i), P(n, i + 1));
+            }
+            for (int x = 0; x < n; x++) for (int z = 0; z < n; z++)
+            {
+                if (x + 1 < n && east[x, z]) EdgeWall(s, P(x + 1, z), P(x + 1, z + 1));
+                if (z + 1 < n && north[x, z]) EdgeWall(s, P(x, z + 1), P(x + 1, z + 1));
+            }
+            // точки появления — центры клеток; дуэль: противоположные углы; команды: левый и правый край
+            for (int x = 0; x < n; x++) for (int z = 0; z < n; z++)
+            {
+                var v = Ground(P(x, z) + new Vector3(c / 2f, 0f, c / 2f));
+                var pt = Pt.From(v, 0f);
+                s.LAll.Add(pt);
+                if (x == 0) s.LA.Add(pt);
+                if (x == n - 1) s.LB.Add(pt);
+            }
+            if (s.Kind == "match" && s.TeamSize <= 1)
+            {
+                s.LA.Clear(); s.LB.Clear();
+                s.LA.Add(Pt.From(Ground(P(0, 0) + new Vector3(c / 2f, 0f, c / 2f)), 45f));
+                s.LB.Add(Pt.From(Ground(P(n - 1, n - 1) + new Vector3(c / 2f, 0f, c / 2f)), 225f));
+            }
+        }
+
+        // роум: большие стены в случайных местах, команды появляются на противоположных краях
+        private void BuildRoam(Session s)
+        {
+            var a = s.Arena;
+            var ctr = a.Center.V;
+            float r = Mathf.Max(30f, a.Radius) * 0.8f;
+            var placed = new List<Vector3>();
+            int tries = 0;
+            while (placed.Count < _config.RoamWalls && tries++ < _config.RoamWalls * 10)
+            {
+                float ang = UnityEngine.Random.Range(0f, 360f) * Mathf.Deg2Rad, dist = Mathf.Sqrt(UnityEngine.Random.value) * r;
+                var v = ctr + new Vector3(Mathf.Cos(ang) * dist, 0f, Mathf.Sin(ang) * dist);
+                if (Mathf.Abs(v.x - ctr.x) > r * 0.85f) continue;           // края свободны под спавны
+                if (placed.Any(q => Vector3.Distance(q, v) < 9f)) continue;
+                placed.Add(v);
+                PlaceWall(s, _config.RoamPrefab, v, UnityEngine.Random.Range(0, 4) * 45f);
+            }
+            if (a.Spawns.Count > 0 || a.SpawnsA.Count > 0) return;          // админ расставил свои точки
+            for (int i = 0; i < 6; i++)
+            {
+                float z = (i - 2.5f) * 6f;
+                var pa = Pt.From(Ground(ctr + new Vector3(-r * 0.95f, 0f, z)), 90f);
+                var pb = Pt.From(Ground(ctr + new Vector3(r * 0.95f, 0f, z)), 270f);
+                s.LA.Add(pa); s.LB.Add(pb); s.LAll.Add(pa); s.LAll.Add(pb);
+            }
+        }
+
+        private Vector3 Ground(Vector3 p)
+        {
+            RaycastHit hit;
+            if (Physics.Raycast(p + Vector3.up * 20f, Vector3.down, out hit, 60f, LayerMask.GetMask("Terrain", "World"), QueryTriggerInteraction.Ignore)) return hit.point;
+            return p;
+        }
+
+        // FFA-лабиринт перестраивается на лету: всех живых переносим на новые точки
+        private void RegenLive(Session s)
+        {
+            BuildLayout(s);
+            foreach (var id in s.Players.ToList())
+            {
+                var p = BasePlayer.FindByID(id);
+                if (p == null || p.IsDead()) continue;
+                var pt = PickSpawn(s, id);
+                if (pt != null) p.Teleport(pt.V + Vector3.up * 0.15f);
+                Center(p, T(id, "MazeNew"), ColRose, 2.5f);
+            }
         }
 
         #endregion
@@ -1203,10 +1402,13 @@ namespace Oxide.Plugins
                         if (p == null || p.IsDead()) continue;
                         if (Vector3.Distance(p.transform.position, s.Arena.Center.V) > s.Arena.Radius)
                         {
-                            var pt = s.Kind == "match" ? Spawns(s.Arena, s.Team.ContainsKey(id) ? s.Team[id] : 0).FirstOrDefault() : PickSpawn(s, id);
+                            var pt = s.Kind == "match" ? SpawnsFor(s, s.Team.ContainsKey(id) ? s.Team[id] : 0).FirstOrDefault() : PickSpawn(s, id);
                             if (pt != null) { p.Teleport(pt.V + Vector3.up * 0.15f); Toast(p, T(id, "Border"), true); }
                         }
                     }
+
+                // лабиринт в FFA/TDM: новый каждые N минут
+                if (s.Arena.Layout == "maze" && s.Kind != "match" && s.NextRegen > 0f && now >= s.NextRegen && s.Players.Count > 0) RegenLive(s);
 
                 // пустая своя комната
                 if (s.Kind == "match" && s.State == "waiting" && s.Players.Count <= 1 && now - s.EmptySince > _config.EmptyClose) CloseMatch(s);
@@ -1411,6 +1613,11 @@ namespace Oxide.Plugins
                 case "hub": ar.HubMode = a.Length > 2 ? a[2] : "ffa"; break;
                 case "template": ar.Template = a.Length < 3 || a[2] == "on"; break;
                 case "barricades": ar.Barricades = a.Length < 3 || a[2] == "on"; break;
+                case "layout":
+                    ar.Layout = a.Length > 2 && (a[2] == "maze" || a[2] == "roam") ? a[2] : "none";
+                    { Session sl; if (_sessions.TryGetValue(ar.Id, out sl)) BuildLayout(sl); }
+                    Reply(player, T(id, "AdmLayout", ar.Layout)); break;
+                case "mazesize": ar.MazeSize = Mathf.Clamp(a.Length > 2 ? int.Parse(a[2]) : 9, 4, 16); break;
                 case "size": ar.Size = a.Length > 2 && a[2] == "large" ? "large" : "small"; if (ar.Size == "large") ar.Barricades = true; break;
                 case "enable": ar.Enabled = true; break;
                 case "disable": ar.Enabled = false; Session s0; if (_sessions.TryGetValue(ar.Id, out s0)) foreach (var pid in s0.Players.ToList()) { var p = BasePlayer.FindByID(pid); if (p != null) Leave(p, true); } break;
@@ -1730,7 +1937,7 @@ namespace Oxide.Plugins
             else
             {
                 var arenas = _data.Arenas.Values.Where(a => a.Enabled && a.Kind == tab).ToList();
-                foreach (var a in arenas.Take(7))
+                foreach (var a in arenas.Take(6))
                 {
                     var aa = a;
                     Session s;
@@ -1743,7 +1950,7 @@ namespace Oxide.Plugins
                         Box(c, R, "0.48 0.07 0.14 0.45", M + G + 8, y + 8, 36, 36, 10f);
                         Text(c, R, aa.Name.Substring(0, 1).ToUpper(), 15, M + G + 8, y + 8, 36, 36, TextAnchor.MiddleCenter, ColRose);
                         Text(c, R, aa.Name, 14, M + G + 54, y + 6, rw - 320, 22);
-                        Text(c, R, T(id, aa.Size == "large" ? "SizeLarge" : "SizeSmall") + " · " + (aa.Kind == "gungame" ? T(id, "GgDesc", _config.GunGameLength) : $"{lo?.Name} · {lo?.Desc}"), 11, M + G + 54, y + 28, rw - 320, 18, TextAnchor.MiddleLeft, ColDim, FontReg);
+                        Text(c, R, (aa.Layout == "maze" ? T(id, "LayMaze") + " · " : aa.Layout == "roam" ? T(id, "LayRoam") + " · " : "") + T(id, aa.Size == "large" ? "SizeLarge" : "SizeSmall") + " · " + (aa.Kind == "gungame" ? T(id, "GgDesc", _config.GunGameLength) : $"{lo?.Name} · {lo?.Desc}"), 11, M + G + 54, y + 28, rw - 320, 18, TextAnchor.MiddleLeft, ColDim, FontReg);
                         Text(c, R, $"{n} / {aa.Max}", 12, M + G + rw - 236, y + 8, 90, 18, TextAnchor.MiddleRight);
                         Box(c, R, "1 1 1 0.08", M + G + rw - 236, y + 32, 90, 4, 2f);
                         if (n > 0) Box(c, R, ColWine, M + G + rw - 236, y + 32, Mathf.Max(4f, 90f * n / Mathf.Max(1, aa.Max)), 4, 2f);
@@ -1803,7 +2010,7 @@ namespace Oxide.Plugins
             if (online.Count == 0) Text(c, R, T(id, "NoOneOnline"), 11, M + 14, top + 32, cw - 28, 30, TextAnchor.MiddleLeft, ColDim, FontReg);
             float ly = top + 32 + 2 * 36 + 8;
             Text(c, R, T(id, "WeaponSet"), 10, M + 14, ly, cw - 28, 16, TextAnchor.MiddleLeft, ColDim);
-            var los = _config.Loadouts.Take(9).ToList();
+            var los = _config.Loadouts.Take(12).ToList();
             for (int i = 0; i < los.Count; i++)
                 Btn(c, R, los[i].Name, "arena.ui duel.set loadout " + los[i].Id, los[i].Id == d.Loadout ? ColWine : ColBtn, 11, M + 14 + (i % 3) * (ow + 6), ly + 22 + (i / 3) * 36, ow, 30, ColText, 10f);
 
@@ -1887,14 +2094,18 @@ namespace Oxide.Plugins
             float x2 = M + cw + G;
             Box(c, R, ColPanel, x2, top, cw, ph, 16f);
             Text(c, R, T(id, "Step2"), 10, x2 + 14, top + 10, cw - 28, 16, TextAnchor.MiddleLeft, ColDim);
-            for (int i = 0; i < _config.Loadouts.Count && i < 9; i++)
+            int nlo = Mathf.Min(12, _config.Loadouts.Count);
+            bool two = nlo > 9;
+            float lw = two ? (cw - 30) / 2f : cw - 24;
+            for (int i = 0; i < nlo; i++)
             {
                 var lo = _config.Loadouts[i];
                 bool a = lo.Id == d.Loadout;
-                Box(c, R, a ? ColWineSoft : ColRow, x2 + 12, top + 34 + i * 44, cw - 24, 38, 12f);
-                Text(c, R, lo.Name, 12, x2 + 24, top + 34 + i * 44 + 2, cw - 48, 18);
-                Text(c, R, lo.Desc, 10, x2 + 24, top + 34 + i * 44 + 19, cw - 48, 16, TextAnchor.MiddleLeft, ColDim, FontReg);
-                Btn(c, R, "", "arena.ui custom.set loadout " + lo.Id, "0 0 0 0", 10, x2 + 12, top + 34 + i * 44, cw - 24, 38, ColText, 0f);
+                float lx = x2 + 12 + (two ? (i % 2) * (lw + 6) : 0f), lyy = top + 34 + (two ? i / 2 : i) * 44;
+                Box(c, R, a ? ColWineSoft : ColRow, lx, lyy, lw, 38, 12f);
+                Text(c, R, lo.Name, two ? 10 : 12, lx + 12, lyy + 2, lw - 20, 18);
+                Text(c, R, lo.Desc, 9, lx + 12, lyy + 19, lw - 20, 16, TextAnchor.MiddleLeft, ColDim, FontReg);
+                Btn(c, R, "", "arena.ui custom.set loadout " + lo.Id, "0 0 0 0", 10, lx, lyy, lw, 38, ColText, 0f);
             }
 
             // 3. правила и доступ
@@ -2394,12 +2605,16 @@ namespace Oxide.Plugins
             new[] { "NoArenas", "Арен нет", "No arenas" },
             new[] { "AdmCreated", "Арена {0} ({1}) создана здесь. Добавь спавны: spawn (ffa/gungame) или spawna/spawnb (tdm/match)", "Arena {0} ({1}) created" },
             new[] { "AdmOk", "{0}: сохранено", "{0}: saved" }, new[] { "AdmDeleted", "Удалено", "Deleted" },
+            new[] { "MazeNew", "Лабиринт перестроен!", "The maze has changed!" },
+            new[] { "LayMaze", "лабиринт", "maze" }, new[] { "LayRoam", "роум · большие стены", "roam · high walls" },
+            new[] { "AdmLayout", "Раскладка арены: {0} (none | maze | roam). Размер лабиринта: /arenaadmin mazesize <id> 4–16", "Arena layout: {0} (none | maze | roam). Maze size: /arenaadmin mazesize <id> 4–16" },
             new[] { "AdmLoadouts", "Наборы: /arenaadmin loadouts", "Kits: /arenaadmin loadouts" },
             new[] { "AdminHelp",
                 "<color=#f0a6b1>/arenaadmin</color>\n" +
                 "create <id> <ffa|tdm|gungame|match> [режим Hub] — новая арена (центр = где стоишь)\n" +
                 "name <id> <название> · loadout <id> <набор> · max <id> <n> · radius <id> <м> · center <id>\n" +
                 "spawn <id> — спавн FFA/ган-гейм · spawna <id> / spawnb <id> — спавны команд (TDM, дуэли)\n" +
+                "layout <id> none|maze|roam — лабиринт из ледяных стен / роум с большими стенами · mazesize <id> 4–16\n" +
                 "clearspawns <id> · template <id> on|off · barricades <id> on|off · hub <id> <режим>\n" +
                 "size <id> small|large — тесная арена или открытая местность (на large в FFA/TDM выдаются баррикады)\n" +
                 "enable|disable|delete|show <id> · list · loadouts",

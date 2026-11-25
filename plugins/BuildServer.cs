@@ -41,7 +41,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("BuildServer", "Claude", "1.2.1")]
+    [Info("BuildServer", "Claude", "1.3.0")]
     [Description("Набор функций билд/креатив-сервера: полёт, предметы, стройка, рейд-тест, участки, телепорты")]
     public class BuildServer : RustPlugin
     {
@@ -154,6 +154,15 @@ namespace Oxide.Plugins
                 new KitEntry { Item = "explosive.timed", Amount = 20 }, new KitEntry { Item = "explosive.satchel", Amount = 30 },
                 new KitEntry { Item = "rifle.ak" }, new KitEntry { Item = "ammo.rifle.explosive", Amount = 256 },
             };
+            [JsonProperty("Рейд с другом: минуты на выбор")] public List<int> FriendRaidMinutes = new List<int> { 5, 10, 15, 30 };
+            [JsonProperty("Рейд с другом: выдать другу рейд-набор")] public bool FriendRaidKit = true;
+            [JsonProperty("Рейд с другом: по окончании вернуть базу")] public bool FriendRaidAutoRestore = true;
+            [JsonProperty("Спавн: предел объектов у игрока")] public int SpawnLimit = 40;
+            [JsonProperty("Спавн: объекты")] public List<SpawnDef> Spawns = DefaultSpawns();
+            [JsonProperty("Электрика: радиус копирования и подсчёта (м)")] public float ElecCopyRadius = 6f;
+            [JsonProperty("Электрика: радиус показа нагрузки (м)")] public float ElecViewRadius = 15f;
+            [JsonProperty("Электрика: своих схем у игрока")] public int ElecSlots = 5;
+            [JsonProperty("Электрика: библиотека схем")] public List<Circuit> Circuits = DefaultCircuits();
             [JsonProperty("Участки: радиус по умолчанию (м)")] public float PlotRadius = 40f;
             [JsonProperty("Участки: максимум у игрока")] public int MaxPlots = 2;
             [JsonProperty("Участки: защита от урона чужим")] public bool PlotDamageProtection = true;
@@ -187,6 +196,9 @@ namespace Oxide.Plugins
             {
                 Config.Settings.ObjectCreationHandling = ObjectCreationHandling.Replace; _config = Config.ReadObject<Configuration>();
                 if (_config == null) throw new Exception();
+                if (_config.Spawns == null || _config.Spawns.Count == 0) _config.Spawns = DefaultSpawns();
+                if (_config.Circuits == null || _config.Circuits.Count == 0) _config.Circuits = DefaultCircuits();
+                if (_config.FriendRaidMinutes == null || _config.FriendRaidMinutes.Count == 0) _config.FriendRaidMinutes = new List<int> { 5, 10, 15, 30 };
             }
             catch
             {
@@ -216,6 +228,7 @@ namespace Oxide.Plugins
             public float X, Y, Z, Radius;
             public string Zone;
             public bool Private;
+            public bool Pvp;                 // хозяин включил PvP: на участке бьют всех, бессмертие не действует
             public List<ulong> Members = new List<ulong>();
         }
 
@@ -438,6 +451,13 @@ namespace Oxide.Plugins
         {
             if (entity == null) return null;
             var victim = entity as BasePlayer;
+            var atk0 = info?.InitiatorPlayer;
+            // PvP-участок: если и жертва, и стрелок внутри — урон проходит, бессмертие не действует
+            if (victim != null && atk0 != null && atk0 != victim)
+            {
+                var vp = PlotAt(victim.transform.position);
+                if (vp != null && vp.Pvp && PlotAt(atk0.transform.position) == vp) return null;
+            }
             if (victim != null && (ulong)victim.userID > 76561197960265728UL && P(Id(victim)).God && (Has(victim, PermGod) || P(Id(victim)).GodByAdmin))
                 return true;
 
@@ -445,10 +465,11 @@ namespace Oxide.Plugins
             var attacker = info?.InitiatorPlayer;
             var plot = PlotAt(entity.transform.position);
             if (plot == null) return null;
+            if (FriendMayHit(plot, attacker)) return null;
             if (attacker == null)
             {
-                // взрывчатка/огонь без игрока — защищаем, если не идёт рейд-тест владельца
-                return _raidTests.ContainsKey(plot.Owner) ? null : (object)true;
+                // взрывчатка/огонь без игрока — защищаем, если не идёт рейд-тест владельца или рейд друга
+                return _raidTests.ContainsKey(plot.Owner) || _friendRaids.ContainsKey(plot.Owner) ? null : (object)true;
             }
             if (IsMember(plot, attacker) || IsAdminLike(attacker)) return null;
             return true;
@@ -902,10 +923,10 @@ namespace Oxide.Plugins
         #region Команды
 
         [ChatCommand("build")]
-        private void CmdBuild(BasePlayer player, string command, string[] args) { if (Has(player, PermUse)) OpenUi(player); }
+        private void CmdBuild(BasePlayer player, string command, string[] args) { if (!Has(player, PermUse)) return; if (args.Length > 0 && Tabs.Contains(args[0])) Ui(Id(player)).Tab = args[0]; OpenUi(player); }
 
         [ChatCommand("b")]
-        private void CmdB(BasePlayer player, string command, string[] args) { if (Has(player, PermUse)) OpenUi(player); }
+        private void CmdB(BasePlayer player, string command, string[] args) => CmdBuild(player, command, args);
 
         [ChatCommand("fly")]
         private void CmdFly(BasePlayer player, string command, string[] args) => ToggleFly(player);
@@ -1175,6 +1196,27 @@ namespace Oxide.Plugins
                 case "raid.start": RaidStart(player); return;
                 case "raid.restore": RaidRestore(player); break;
                 case "raid.kit": foreach (var k in _config.RaidKit) Give(player, k.Item, k.Amount); break;
+                case "raid.path": RaidPath(player); break;
+                case "fr.pick": { ulong fp; if (ulong.TryParse(rest, out fp)) _friendPick[id] = fp; } break;
+                case "fr.min": _friendMin[id] = n; break;
+                case "fr.start": FriendRaidStart(player); break;
+                case "fr.stop": FriendRaidStop(id, false); break;
+                case "el.place": if (n >= 0 && n < _config.Circuits.Count) PlaceCircuit(player, _config.Circuits[n]); break;
+                case "el.copy": CopyCircuit(player); break;
+                case "el.paste": { List<Circuit> mine; if (Circuits().Saved.TryGetValue(id, out mine) && n >= 0 && n < mine.Count) PlaceCircuit(player, mine[n]); } break;
+                case "el.del": { List<Circuit> mine; if (Circuits().Saved.TryGetValue(id, out mine) && n >= 0 && n < mine.Count) { mine.RemoveAt(n); SaveCircuits(); } } break;
+                case "el.cost": CircuitCost(player); break;
+                case "el.load": ToggleLoad(player); break;
+                case "sp.spawn": SpawnObject(player, n); break;
+                case "sp.clear": SpawnClear(player); break;
+                case "plot.pvp":
+                {
+                    var pl0 = PlotAt(player.transform.position);
+                    if (pl0 == null || pl0.Owner != id) { Reply(player, "NotInOwnPlot"); break; }
+                    pl0.Pvp = !pl0.Pvp; _dirty = true;
+                    foreach (var bp in BasePlayer.activePlayerList) if (PlotAt(bp.transform.position) == pl0) Toast(bp, T(Id(bp), pl0.Pvp ? "PvpOn" : "PvpOff", pl0.Name), pl0.Pvp);
+                    break;
+                }
 
                 case "plot.claim": ClaimPlot(player); break;
                 case "plot.unclaim": UnclaimPlot(player); break;
@@ -2009,6 +2051,10 @@ namespace Oxide.Plugins
                 iy += 38;
                 if (here.Owner == id)
                 {
+                    Box(c, here.Pvp ? "0.66 0.09 0.16 0.35" : ColRow, x + 14, iy, curW - 28, 28, null, UiMain, 8f);
+                    Text(c, T(id, "PlotPvp"), 11, x + 24, iy, curW - 120, 28);
+                    Pill(c, id, here.Pvp, "bs.ui plot.pvp", x + curW - 14 - 78, iy + 4);
+                    iy += 34;
                     Text(c, T(id, "PlotMembers"), 10, x + 14, iy, curW - 28, 16, TextAnchor.MiddleLeft, ColDim); iy += 20;
                     foreach (var mId in here.Members.Take(2))
                     {
@@ -2463,6 +2509,552 @@ namespace Oxide.Plugins
 
         #endregion
 
+        #region 1.3: рейд с другом, путь до ТШ, мгновенный крафт, электрика, спавн, PvP
+
+        // ---------- мгновенный бесплатный крафт: во время рейд-теста и рейда с другом ----------
+
+        private bool FreeCraft(BasePlayer p)
+        {
+            if (p == null) return false;
+            var id = Id(p);
+            if (_raidTests.ContainsKey(id)) return true;
+            float now = Time.realtimeSinceStartup;
+            return _friendRaids.Values.Any(f => (f.Owner == id || f.Friend == id) && now < f.Until);
+        }
+
+        private object CanCraft(ItemCrafter crafter, ItemBlueprint bp, int amount, bool free)
+        {
+            var p = Member(crafter, "owner") as BasePlayer;
+            return p != null && FreeCraft(p) ? (object)true : null;
+        }
+
+        private object OnItemCraft(ItemCraftTask task, BasePlayer owner, Item fromTempBlueprint)
+        {
+            if (owner == null || task?.blueprint?.targetItem == null || !FreeCraft(owner)) return null;
+            var it = ItemManager.Create(task.blueprint.targetItem, Mathf.Max(1, task.blueprint.amountToCreate) * Mathf.Max(1, task.amount), 0UL);
+            if (it != null) owner.GiveItem(it);
+            return false;
+        }
+
+        // ---------- друг рейдит базу с таймером ----------
+
+        private class FriendRaid { public ulong Owner, Friend; public string FriendName; public float Until; public Timer T; }
+        private readonly Dictionary<ulong, FriendRaid> _friendRaids = new Dictionary<ulong, FriendRaid>();
+        private readonly Dictionary<ulong, ulong> _friendPick = new Dictionary<ulong, ulong>();
+        private readonly Dictionary<ulong, int> _friendMin = new Dictionary<ulong, int>();
+
+        private bool FriendMayHit(Plot plot, BasePlayer attacker)
+        {
+            FriendRaid f;
+            return plot != null && attacker != null && _friendRaids.TryGetValue(plot.Owner, out f) && f.Friend == Id(attacker) && Time.realtimeSinceStartup < f.Until;
+        }
+
+        private void FriendRaidStart(BasePlayer player)
+        {
+            var id = Id(player);
+            ulong fid;
+            if (!_friendPick.TryGetValue(id, out fid)) { Toast(player, T(id, "FrPick"), true); return; }
+            var friend = BasePlayer.FindByID(fid);
+            if (friend == null || !friend.IsConnected) { Toast(player, T(id, "PlayerNotFound"), true); return; }
+            if (!_raidTests.ContainsKey(id)) { RaidStart(player); if (!_raidTests.ContainsKey(id)) return; }
+            int min; if (!_friendMin.TryGetValue(id, out min)) min = _config.FriendRaidMinutes.FirstOrDefault();
+            FriendRaidStop(id, false);
+            var fr = new FriendRaid { Owner = id, Friend = fid, FriendName = friend.displayName, Until = Time.realtimeSinceStartup + min * 60f };
+            fr.T = timer.Once(min * 60f, () => FriendRaidStop(id, true));
+            _friendRaids[id] = fr;
+            Toast(player, T(id, "FrStarted", friend.displayName, min), false);
+            Toast(friend, T(fid, "FrInvited", player.displayName, min), false);
+            if (_config.FriendRaidKit) foreach (var k in _config.RaidKit) Give(friend, k.Item, k.Amount);
+        }
+
+        private void FriendRaidStop(ulong owner, bool timeUp)
+        {
+            FriendRaid f;
+            if (!_friendRaids.TryGetValue(owner, out f)) return;
+            _friendRaids.Remove(owner);
+            f.T?.Destroy();
+            var op = BasePlayer.FindByID(owner);
+            var fp = BasePlayer.FindByID(f.Friend);
+            if (fp != null) Toast(fp, T(f.Friend, timeUp ? "FrTimeUp" : "FrStopped"), true);
+            if (op != null)
+            {
+                Toast(op, T(owner, timeUp ? "FrTimeUp" : "FrStopped"), true);
+                if (timeUp && _config.FriendRaidAutoRestore) RaidRestore(op);
+            }
+        }
+
+        // ---------- путь до шкафа: где базу пробить дешевле всего ----------
+
+        private static readonly int[] RaidSulfur = { 1400, 2200, 480, 25 };   // ракета, C4, сэтчел, взрывной патрон
+        private class PathReport { public string Dir; public int Sulfur; public List<string> Lines = new List<string>(); public List<Vector3> Points = new List<Vector3>(); }
+        private readonly Dictionary<ulong, PathReport> _pathReport = new Dictionary<ulong, PathReport>();
+
+        private void RaidPath(BasePlayer player)
+        {
+            var id = Id(player);
+            BaseEntity looked;
+            var building = LookBuilding(player, out looked);
+            if (building == null) { Reply(player, "LookAtBuilding"); return; }
+            var tc = building.decayEntities.OfType<BuildingPrivlidge>().FirstOrDefault();
+            if (tc == null) { Toast(player, T(id, "PathNoTc"), true); return; }
+            var target = tc.transform.position + Vector3.up * 0.6f;
+            var dirs = new List<KeyValuePair<string, Vector3>>();
+            string[] names = { "DirN", "DirNE", "DirE", "DirSE", "DirS", "DirSW", "DirW", "DirNW" };
+            for (int i = 0; i < 8; i++)
+            {
+                float a = i * 45f * Mathf.Deg2Rad;
+                dirs.Add(new KeyValuePair<string, Vector3>(names[i], new Vector3(Mathf.Sin(a), 0f, Mathf.Cos(a))));
+            }
+            dirs.Add(new KeyValuePair<string, Vector3>("DirTop", Vector3.up));
+            int mask = LayerMask.GetMask("Construction", "Deployed");
+            PathReport best = null;
+            foreach (var d in dirs)
+            {
+                var origin = target + d.Value * 45f;
+                var hits = Physics.RaycastAll(origin, d.Value * -1f, 45f, mask, QueryTriggerInteraction.Ignore).OrderBy(h => h.distance).ToList();
+                var rep = new PathReport { Dir = T(id, d.Key) };
+                var seen = new HashSet<BaseEntity>();
+                foreach (var h in hits)
+                {
+                    var e = h.GetEntity() as BaseCombatEntity;
+                    if (e == null || e == tc || !seen.Add(e)) continue;
+                    if (e.Health() <= 0f) continue;
+                    // самый дешёвый по сере способ пробить этот слой
+                    int bestItem = 0, bestS = int.MaxValue;
+                    for (int k = 0; k < RaidItems.Length; k++) { int s = RaidCount(e, k) * RaidSulfur[k]; if (s < bestS) { bestS = s; bestItem = k; } }
+                    rep.Sulfur += bestS;
+                    rep.Lines.Add($"{RaidName(id, e)} — {RaidCount(e, bestItem)} × {T(id, "RI_" + bestItem)}");
+                    rep.Points.Add(e.transform.position + Vector3.up * 1.2f);
+                }
+                if (rep.Lines.Count == 0) continue;
+                if (best == null || rep.Sulfur < best.Sulfur) best = rep;
+            }
+            if (best == null) { Toast(player, T(id, "PathOpen"), false); _pathReport.Remove(id); return; }
+            best.Points.Add(target);
+            _pathReport[id] = best;
+            WithAdmin(player, () =>
+            {
+                var col = new Color(0.94f, 0.65f, 0.69f);
+                for (int i = 0; i + 1 < best.Points.Count; i++) player.SendConsoleCommand("ddraw.arrow", 30f, col, best.Points[i], best.Points[i + 1], 0.4f);
+                for (int i = 0; i < best.Lines.Count; i++) player.SendConsoleCommand("ddraw.text", 30f, col, best.Points[i], $"<size=14>{i + 1}. {best.Lines[i]}</size>");
+                player.SendConsoleCommand("ddraw.text", 30f, Color.white, target, "<size=18>ТШ</size>");
+            });
+        }
+
+        // ---------- спавн объектов ----------
+
+        private class SpawnDef
+        {
+            [JsonProperty("Группа (trees | ore | loot | npc)")] public string Cat;
+            [JsonProperty("Название")] public string Name;
+            [JsonProperty("Название EN")] public string En;
+            [JsonProperty("Префаб")] public string Prefab;
+        }
+
+        private static List<SpawnDef> DefaultSpawns()
+        {
+            Func<string, string, string, string, SpawnDef> S = (c, n, e, p) => new SpawnDef { Cat = c, Name = n, En = e, Prefab = p };
+            return new List<SpawnDef>
+            {
+                S("trees", "Сосна", "Pine", "assets/bundled/prefabs/autospawn/resource/v3_temp_forest_pine/pine_a.prefab"),
+                S("trees", "Дуб", "Oak", "assets/bundled/prefabs/autospawn/resource/v3_temp_forest/oak_b.prefab"),
+                S("trees", "Берёза", "Birch", "assets/bundled/prefabs/autospawn/resource/v3_temp_forest/birch_big_temp.prefab"),
+                S("trees", "Пальма", "Palm", "assets/bundled/prefabs/autospawn/resource/v3_arid_forest/palm_tree_tall_a_entity.prefab"),
+                S("trees", "Куст", "Bush", "assets/bundled/prefabs/autospawn/resource/v3_bushes_temp/bush_willow_a.prefab"),
+                S("ore", "Камень", "Stone ore", "assets/bundled/prefabs/autospawn/resource/ores/stone-ore.prefab"),
+                S("ore", "Металл", "Metal ore", "assets/bundled/prefabs/autospawn/resource/ores/metal-ore.prefab"),
+                S("ore", "Сера", "Sulfur ore", "assets/bundled/prefabs/autospawn/resource/ores/sulfur-ore.prefab"),
+                S("ore", "Валун", "Boulder", "assets/bundled/prefabs/autospawn/resource/rocks/rock_formation_a.prefab"),
+                S("loot", "Обычный ящик", "Crate", "assets/bundled/prefabs/radtown/crate_normal_2.prefab"),
+                S("loot", "Военный ящик", "Military crate", "assets/bundled/prefabs/radtown/crate_normal.prefab"),
+                S("loot", "Элитный ящик", "Elite crate", "assets/bundled/prefabs/radtown/crate_elite.prefab"),
+                S("loot", "Ящик с инструментами", "Tool crate", "assets/bundled/prefabs/radtown/crate_tools.prefab"),
+                S("loot", "Бочка", "Barrel", "assets/bundled/prefabs/radtown/loot_barrel_1.prefab"),
+                S("npc", "Учёный", "Scientist", "assets/rust.ai/agents/npcplayer/humannpc/scientist/scientistnpc_roam.prefab"),
+                S("npc", "Турель", "Auto turret", "assets/prefabs/npc/autoturret/autoturret_deployed.prefab"),
+                S("npc", "ПВО", "SAM site", "assets/prefabs/npc/sam_site_turret/sam_site_turret_deployed.prefab"),
+                S("npc", "Огнемётная турель", "Flame turret", "assets/prefabs/npc/flame turret/flameturret.deployed.prefab"),
+                S("npc", "Дробовик-ловушка", "Shotgun trap", "assets/prefabs/deployable/single shot trap/guntrap.deployed.prefab"),
+            };
+        }
+
+        private static readonly string[] SpawnCats = { "trees", "ore", "loot", "npc" };
+        private readonly Dictionary<ulong, List<BaseEntity>> _spawned = new Dictionary<ulong, List<BaseEntity>>();
+
+        private Vector3? LookPoint(BasePlayer player, float dist = 40f)
+        {
+            RaycastHit hit;
+            if (!Physics.Raycast(player.eyes.HeadRay(), out hit, dist, LayerMask.GetMask("Terrain", "World", "Construction", "Default"), QueryTriggerInteraction.Ignore)) return null;
+            return hit.point;
+        }
+
+        private void SpawnObject(BasePlayer player, int index)
+        {
+            var id = Id(player);
+            if (index < 0 || index >= _config.Spawns.Count) return;
+            var def = _config.Spawns[index];
+            var at = LookPoint(player);
+            if (at == null) { Toast(player, T(id, "SpLook"), true); return; }
+            var plot = PlotAt(at.Value);
+            if (plot != null && !IsMember(plot, player) && !IsAdminLike(player)) { Toast(player, T(id, "PlotNoBuild", plot.OwnerName ?? "?"), true); return; }
+            List<BaseEntity> list;
+            if (!_spawned.TryGetValue(id, out list)) _spawned[id] = list = new List<BaseEntity>();
+            list.RemoveAll(e => e == null || e.IsDestroyed);
+            if (!IsAdminLike(player) && list.Count >= _config.SpawnLimit) { Toast(player, T(id, "SpLimit", _config.SpawnLimit), true); return; }
+            var e2 = GameManager.server.CreateEntity(def.Prefab, at.Value, Quaternion.Euler(0f, player.eyes.rotation.eulerAngles.y + 180f, 0f));
+            if (e2 == null) { Toast(player, T(id, "SpBad"), true); return; }
+            e2.OwnerID = id;
+            e2.enableSaving = false;
+            e2.Spawn();
+            list.Add(e2);
+            Toast(player, T(id, "SpDone", Lang(id) == "ru" ? def.Name : def.En ?? def.Name, list.Count, _config.SpawnLimit), false);
+        }
+
+        private void SpawnClear(BasePlayer player)
+        {
+            List<BaseEntity> list;
+            if (!_spawned.TryGetValue(Id(player), out list)) return;
+            foreach (var e in list) if (e != null && !e.IsDestroyed) e.Kill();
+            list.Clear();
+        }
+
+        // ---------- электрика: библиотека, копирование, стоимость, нагрузка ----------
+
+        private class CircuitPart { public string Prefab; public float X, Y, Z, Yaw; }
+        private class CircuitLink { public int From, FromSlot, To, ToSlot; }
+        private class Circuit
+        {
+            [JsonProperty("Название")] public string Name;
+            [JsonProperty("Название EN")] public string En;
+            [JsonProperty("Описание")] public string Desc;
+            [JsonProperty("Детали")] public List<CircuitPart> Parts = new List<CircuitPart>();
+            [JsonProperty("Провода")] public List<CircuitLink> Links = new List<CircuitLink>();
+        }
+
+        private const string PGen = "assets/prefabs/deployable/playerioents/generators/generator.small.prefab";
+        private const string PSolar = "assets/prefabs/deployable/playerioents/generators/solar_panels_roof/solarpanel.large.deployed.prefab";
+        private const string PBattery = "assets/prefabs/deployable/playerioents/batteries/smallrechargablebattery.deployed.prefab";
+        private const string PSwitch = "assets/prefabs/deployable/playerioents/simpleswitch/switch.prefab";
+        private const string PLight = "assets/prefabs/deployable/playerioents/lights/simplelight.prefab";
+        private const string PSplitter = "assets/prefabs/deployable/playerioents/gates/splitter/splitter.prefab";
+        private const string PHbhf = "assets/prefabs/deployable/playerioents/detectors/hbhfsensor/hbhfsensor.deployed.prefab";
+        private const string PDoorCtl = "assets/prefabs/deployable/playerioents/doormanipulators/doorcontroller.deployed.prefab";
+        private const string PTurret = "assets/prefabs/npc/autoturret/autoturret_deployed.prefab";
+
+        private static Circuit C(string n, string en, string d, object[][] parts, int[][] links) => new Circuit
+        {
+            Name = n, En = en, Desc = d,
+            Parts = parts.Select(p => new CircuitPart { Prefab = (string)p[0], X = Convert.ToSingle(p[1]), Y = Convert.ToSingle(p[2]), Z = Convert.ToSingle(p[3]) }).ToList(),
+            Links = links.Select(l => new CircuitLink { From = l[0], FromSlot = l[1], To = l[2], ToSlot = l[3] }).ToList(),
+        };
+
+        private static List<Circuit> DefaultCircuits() => new List<Circuit>
+        {
+            C("Свет по кнопке", "Light switch", "генератор › выключатель › лампа",
+                new[] { new object[] { PGen, -1.5, 0, 0 }, new object[] { PSwitch, 0, 0.8, 0 }, new object[] { PLight, 1.5, 0.8, 0 } },
+                new[] { new[] { 0, 0, 1, 0 }, new[] { 1, 0, 2, 0 } }),
+            C("Солнце + батарея", "Solar + battery", "солнечная панель › батарея › лампа",
+                new[] { new object[] { PSolar, -2, 0, 0 }, new object[] { PBattery, 0, 0, 0 }, new object[] { PLight, 1.5, 0.8, 0 } },
+                new[] { new[] { 0, 0, 1, 0 }, new[] { 1, 0, 2, 0 } }),
+            C("Турель на батарее", "Turret on battery", "генератор › батарея › турель",
+                new[] { new object[] { PGen, -2, 0, 0 }, new object[] { PBattery, 0, 0, 0 }, new object[] { PTurret, 2, 0, 0 } },
+                new[] { new[] { 0, 0, 1, 0 }, new[] { 1, 0, 2, 0 } }),
+            C("Сенсор и дверь", "Sensor door", "генератор › сенсор HBHF › контроллер двери",
+                new[] { new object[] { PGen, -2, 0, 0 }, new object[] { PHbhf, 0, 1.2, 0 }, new object[] { PDoorCtl, 2, 1, 0 } },
+                new[] { new[] { 0, 0, 1, 0 }, new[] { 1, 0, 2, 0 } }),
+            C("Сплиттер на 3 лампы", "Splitter x3", "генератор › сплиттер › три лампы",
+                new[] { new object[] { PGen, -2, 0, 0 }, new object[] { PSplitter, 0, 0.8, 0 }, new object[] { PLight, 1.5, 0.8, -1.2 }, new object[] { PLight, 1.5, 0.8, 0 }, new object[] { PLight, 1.5, 0.8, 1.2 } },
+                new[] { new[] { 0, 0, 1, 0 }, new[] { 1, 0, 2, 0 }, new[] { 1, 1, 3, 0 }, new[] { 1, 2, 4, 0 } }),
+        };
+
+        private class CircuitStore { public Dictionary<ulong, List<Circuit>> Saved = new Dictionary<ulong, List<Circuit>>(); }
+        private CircuitStore _circuits;
+
+        private CircuitStore Circuits()
+        {
+            if (_circuits != null) return _circuits;
+            try { _circuits = Interface.Oxide.DataFileSystem.ReadObject<CircuitStore>("BuildServer_circuits"); } catch { }
+            if (_circuits == null) _circuits = new CircuitStore();
+            if (_circuits.Saved == null) _circuits.Saved = new Dictionary<ulong, List<Circuit>>();
+            return _circuits;
+        }
+
+        private void SaveCircuits() => Interface.Oxide.DataFileSystem.WriteObject("BuildServer_circuits", Circuits());
+
+        private static Vector3 Rot(Vector3 v, float yaw) => Quaternion.Euler(0f, yaw, 0f) * v;
+
+        private void PlaceCircuit(BasePlayer player, Circuit cir)
+        {
+            var id = Id(player);
+            var at = LookPoint(player, 20f);
+            if (at == null) { Toast(player, T(id, "SpLook"), true); return; }
+            var plot = PlotAt(at.Value);
+            if (plot != null && !IsMember(plot, player) && !IsAdminLike(player)) { Toast(player, T(id, "PlotNoBuild", plot.OwnerName ?? "?"), true); return; }
+            float yaw = player.eyes.rotation.eulerAngles.y;
+            var ents = new List<IOEntity>();
+            foreach (var part in cir.Parts)
+            {
+                var pos = at.Value + Rot(new Vector3(part.X, part.Y, part.Z), yaw);
+                var e = GameManager.server.CreateEntity(part.Prefab, pos, Quaternion.Euler(0f, yaw + part.Yaw + 180f, 0f));
+                if (e == null) { ents.Add(null); continue; }
+                e.OwnerID = id;
+                e.Spawn();
+                ents.Add(e as IOEntity);
+            }
+            int wired = 0;
+            foreach (var l in cir.Links)
+                if (l.From < ents.Count && l.To < ents.Count && Wire(ents[l.From], l.FromSlot, ents[l.To], l.ToSlot)) wired++;
+            Toast(player, T(id, "ElPlaced", ents.Count(e => e != null), wired), false);
+        }
+
+        // провод: выход src[slot] → вход dst[slot]; линия — от ручки к ручке, в координатах источника
+        private static bool Wire(IOEntity src, int outSlot, IOEntity dst, int inSlot)
+        {
+            if (src == null || dst == null || src.outputs == null || dst.inputs == null) return false;
+            if (outSlot >= src.outputs.Length || inSlot >= dst.inputs.Length) return false;
+            try
+            {
+                var o = src.outputs[outSlot]; var i = dst.inputs[inSlot];
+                o.connectedTo.Set(dst); o.connectedToSlot = inSlot; o.connectedTo.Init();
+                i.connectedTo.Set(src); i.connectedToSlot = outSlot; i.connectedTo.Init();
+                o.linePoints = new[] { o.handlePosition, src.transform.InverseTransformPoint(dst.transform.TransformPoint(i.handlePosition)) };
+                src.MarkDirtyForceUpdateOutputs();
+                src.SendNetworkUpdate(); dst.SendNetworkUpdate();
+                return true;
+            }
+            catch { return false; }
+        }
+
+        private List<IOEntity> IoAround(Vector3 center, float r)
+        {
+            var list = new List<IOEntity>();
+            Vis.Entities(center, r, list, LayerMask.GetMask("Deployed", "Default"), QueryTriggerInteraction.Ignore);
+            return list.Where(e => e != null && !e.IsDestroyed).Distinct().ToList();
+        }
+
+        private void CopyCircuit(BasePlayer player)
+        {
+            var id = Id(player);
+            var at = LookPoint(player, 20f) ?? player.transform.position;
+            var ents = IoAround(at, _config.ElecCopyRadius).Where(e => CanModify(player, e)).Take(60).ToList();
+            if (ents.Count == 0) { Toast(player, T(id, "ElNone"), true); return; }
+            float yaw = player.eyes.rotation.eulerAngles.y;
+            var cir = new Circuit { Name = T(id, "ElMine", (Circuits().Saved.ContainsKey(id) ? Circuits().Saved[id].Count : 0) + 1) };
+            foreach (var e in ents)
+            {
+                var local = Rot(e.transform.position - at, -yaw);
+                cir.Parts.Add(new CircuitPart { Prefab = e.PrefabName, X = local.x, Y = local.y, Z = local.z, Yaw = e.transform.rotation.eulerAngles.y - yaw - 180f });
+            }
+            for (int a = 0; a < ents.Count; a++)
+            {
+                var outs = ents[a].outputs ?? new IOSlot[0];
+                for (int s = 0; s < outs.Length; s++)
+                {
+                    var to = outs[s].connectedTo?.Get(true);
+                    int b = to == null ? -1 : ents.IndexOf(to);
+                    if (b >= 0) cir.Links.Add(new CircuitLink { From = a, FromSlot = s, To = b, ToSlot = outs[s].connectedToSlot });
+                }
+            }
+            List<Circuit> mine;
+            if (!Circuits().Saved.TryGetValue(id, out mine)) Circuits().Saved[id] = mine = new List<Circuit>();
+            if (mine.Count >= _config.ElecSlots) mine.RemoveAt(0);
+            mine.Add(cir);
+            SaveCircuits();
+            Toast(player, T(id, "ElCopied", cir.Parts.Count, cir.Links.Count), false);
+        }
+
+        private readonly Dictionary<ulong, Dictionary<int, int>> _elecCost = new Dictionary<ulong, Dictionary<int, int>>();
+
+        private void CircuitCost(BasePlayer player)
+        {
+            var id = Id(player);
+            var at = LookPoint(player, 20f) ?? player.transform.position;
+            var cost = new Dictionary<int, int>();
+            int n = 0;
+            foreach (var e in IoAround(at, _config.ElecCopyRadius))
+            {
+                var def = DeployItem(e);
+                if (def == null) continue;
+                n++;
+                AddAmounts(cost, Member(Member(def, "Blueprint"), "ingredients"));
+            }
+            _elecCost[id] = cost;
+            Toast(player, T(id, "ElCost", n), false);
+        }
+
+        private readonly HashSet<ulong> _loadView = new HashSet<ulong>();
+        private Timer _loadTimer;
+
+        private void LoadTick()
+        {
+            foreach (var id in _loadView.ToList())
+            {
+                var p = BasePlayer.FindByID(id);
+                if (p == null || !p.IsConnected) { _loadView.Remove(id); continue; }
+                var ents = IoAround(p.transform.position, _config.ElecViewRadius).Take(40).ToList();
+                if (ents.Count == 0) continue;
+                WithAdmin(p, () =>
+                {
+                    foreach (var e in ents)
+                    {
+                        int inW = e.currentEnergy, use = 0, outW = 0;
+                        try { use = e.ConsumptionAmount(); outW = e.GetPassthroughAmount(0); } catch { }
+                        var col = inW > 0 ? new Color(0.5f, 0.83f, 0.6f) : new Color(0.88f, 0.34f, 0.42f);
+                        p.SendConsoleCommand("ddraw.text", 1.1f, col, e.transform.position + Vector3.up * 0.7f, $"<size=13>{T(id, "ElLoadFmt", inW, use, outW)}</size>");
+                    }
+                });
+            }
+            if (_loadView.Count == 0) { _loadTimer?.Destroy(); _loadTimer = null; }
+        }
+
+        private void ToggleLoad(BasePlayer player)
+        {
+            var id = Id(player);
+            if (!_loadView.Remove(id)) _loadView.Add(id);
+            if (_loadView.Count > 0 && _loadTimer == null) _loadTimer = timer.Every(1f, LoadTick);
+        }
+
+        // ---------- интерфейс: вкладки «Электрика» и «Спавн», блоки рейда ----------
+
+        private void BuildElec(CuiElementContainer c, BasePlayer player, float x, float y, float w)
+        {
+            var id = Id(player);
+            float hw = Col(w, 2), ph = Bottom - y;
+            // слева — библиотека
+            Box(c, ColPanel, x, y, hw, ph, null, UiMain, 12f);
+            Box(c, ColWine, x, y, hw, 30, null, UiMain, 12f);
+            Text(c, T(id, "ElLib"), 12, x + 12, y, hw - 24, 30);
+            float iy = y + 40;
+            for (int i = 0; i < _config.Circuits.Count && i < 7; i++)
+            {
+                var cir = _config.Circuits[i];
+                Box(c, ColRow, x + 10, iy, hw - 20, 62, null, UiMain, 10f);
+                Text(c, Lang(id) == "ru" ? cir.Name : cir.En ?? cir.Name, 13, x + 22, iy + 6, hw - 150, 22);
+                Text(c, cir.Desc, 10, x + 22, iy + 30, hw - 150, 26, TextAnchor.UpperLeft, ColDim, FontReg);
+                Btn(c, T(id, "ElPlace"), "bs.ui el.place " + i, ColWine, 11, x + hw - 124, iy + 15, 104, 32);
+                iy += 70;
+            }
+            Text(c, T(id, "ElLibHint"), 10, x + 14, y + ph - 40, hw - 28, 32, TextAnchor.MiddleLeft, ColDim, FontReg);
+
+            // справа — мои схемы, стоимость, нагрузка
+            float rx = x + hw + G;
+            float mh = 260f;
+            Box(c, ColPanel, rx, y, hw, mh, null, UiMain, 12f);
+            Text(c, T(id, "ElMineTitle", _config.ElecSlots), 12, rx + 14, y + 8, hw - 28, 22);
+            Btn(c, T(id, "ElCopy", _config.ElecCopyRadius), "bs.ui el.copy", ColWine, 12, rx + 14, y + 36, hw - 28, 34);
+            List<Circuit> mine;
+            Circuits().Saved.TryGetValue(id, out mine);
+            float my = y + 80;
+            if (mine == null || mine.Count == 0) Text(c, T(id, "ElMineEmpty"), 11, rx + 14, my, hw - 28, 60, TextAnchor.UpperLeft, ColDim, FontReg);
+            else
+                for (int i = 0; i < mine.Count && i < _config.ElecSlots; i++)
+                {
+                    Box(c, ColRow, rx + 14, my, hw - 28, 32, null, UiMain, 8f);
+                    Text(c, $"{mine[i].Name} · {mine[i].Parts.Count} {T(id, "ElParts")} · {mine[i].Links.Count} {T(id, "ElWires")}", 11, rx + 24, my, hw - 200, 32);
+                    Btn(c, T(id, "ElPaste"), "bs.ui el.paste " + i, ColBtn, 10, rx + hw - 14 - 140, my + 4, 100, 24);
+                    Btn(c, "X", "bs.ui el.del " + i, ColBtn, 10, rx + hw - 14 - 34, my + 4, 28, 24, "0.92 0.42 0.48 1");
+                    my += 38;
+                }
+
+            float cy = y + mh + G, ch = Bottom - cy;
+            Box(c, ColPanel, rx, cy, hw, ch, null, UiMain, 12f);
+            Text(c, T(id, "ElLoad"), 12, rx + 14, cy + 8, hw - 120, 22);
+            Pill(c, id, _loadView.Contains(id), "bs.ui el.load", rx + hw - 14 - 72, cy + 10);
+            Text(c, T(id, "ElLoadHint"), 10, rx + 14, cy + 32, hw - 28, 30, TextAnchor.UpperLeft, ColDim, FontReg);
+            Btn(c, T(id, "ElCostBtn", _config.ElecCopyRadius), "bs.ui el.cost", ColBtn, 12, rx + 14, cy + 66, hw - 28, 32);
+            Dictionary<int, int> cost;
+            if (_elecCost.TryGetValue(id, out cost))
+            {
+                if (cost.Count == 0) Text(c, T(id, "ElNone"), 11, rx + 14, cy + 108, hw - 28, 24, TextAnchor.MiddleLeft, ColDim, FontReg);
+                int k = 0;
+                foreach (var kv in cost.OrderByDescending(v => v.Value).Take(8))
+                {
+                    float ix = rx + 14 + (k % 8) * 54f, iy2 = cy + 108;
+                    Box(c, ColRow, ix, iy2, 48, 48, null, UiMain, 8f);
+                    ItemIcon(c, kv.Key, ix + 6, iy2 + 4, 36);
+                    Text(c, "×" + kv.Value, 9, ix, iy2 + 34, 44, 14, TextAnchor.MiddleRight, ColText, Font);
+                    k++;
+                }
+            }
+        }
+
+        private void BuildSpawn(CuiElementContainer c, BasePlayer player, float x, float y, float w)
+        {
+            var id = Id(player);
+            float cw4 = Col(w, 4), foot = 46f, ph = Bottom - y - foot - G;
+            for (int ci = 0; ci < SpawnCats.Length; ci++)
+            {
+                float cx = x + ci * (cw4 + G);
+                Box(c, ColPanel, cx, y, cw4, ph, null, UiMain, 12f);
+                Box(c, ColWine, cx, y, cw4, 30, null, UiMain, 12f);
+                Text(c, T(id, "SpCat_" + SpawnCats[ci]), 12, cx, y, cw4, 30, TextAnchor.MiddleCenter);
+                float iy = y + 40;
+                for (int i = 0; i < _config.Spawns.Count; i++)
+                {
+                    var d = _config.Spawns[i];
+                    if (d.Cat != SpawnCats[ci] || iy + 36 > y + ph - 6) continue;
+                    Btn(c, Lang(id) == "ru" ? d.Name : d.En ?? d.Name, "bs.ui sp.spawn " + i, ColRow, 12, cx + 10, iy, cw4 - 20, 34);
+                    iy += 40;
+                }
+            }
+            List<BaseEntity> list;
+            int n = _spawned.TryGetValue(id, out list) ? list.Count(e => e != null && !e.IsDestroyed) : 0;
+            float fy = Bottom - foot;
+            Box(c, ColPanel, x, fy, w, foot, null, UiMain, 12f);
+            Text(c, T(id, "SpFoot", n, _config.SpawnLimit), 11, x + 16, fy, w - 220, foot, TextAnchor.MiddleLeft, ColDim, FontReg);
+            Btn(c, T(id, "SpClear"), "bs.ui sp.clear", ColBtn, 12, x + w - 196, fy + 7, 180, 32, "0.92 0.42 0.48 1");
+        }
+
+        // блок «друг рейдит» и «путь до ТШ» во вкладке рейда
+        private float BuildRaidExtra(CuiElementContainer c, BasePlayer player, float x, float y, float w)
+        {
+            var id = Id(player);
+            float hw = Col(w, 2), bh = 168f;
+            // друг рейдит
+            Box(c, ColPanel, x, y, hw, bh, null, UiMain, 12f);
+            Text(c, T(id, "FrTitle"), 12, x + 14, y + 8, hw - 28, 20);
+            FriendRaid fr;
+            if (_friendRaids.TryGetValue(id, out fr))
+            {
+                int left = Mathf.Max(0, Mathf.CeilToInt(fr.Until - Time.realtimeSinceStartup));
+                Text(c, T(id, "FrActive", fr.FriendName, left / 60, left % 60), 13, x + 14, y + 40, hw - 28, 60, TextAnchor.MiddleCenter, ColRose);
+                Btn(c, T(id, "FrStop"), "bs.ui fr.stop", ColBtn, 12, x + 14, y + bh - 46, hw - 28, 34);
+            }
+            else
+            {
+                ulong pick; _friendPick.TryGetValue(id, out pick);
+                var online = BasePlayer.activePlayerList.Where(p => p != player && p.IsConnected).OrderBy(p => p.displayName).Take(4).ToList();
+                float cw2 = (hw - 28 - 6) / 2f;
+                for (int i = 0; i < online.Count; i++)
+                    Btn(c, online[i].displayName, "bs.ui fr.pick " + Id(online[i]), Id(online[i]) == pick ? ColWine : ColRow, 11, x + 14 + (i % 2) * (cw2 + 6), y + 34 + (i / 2) * 32, cw2, 28);
+                if (online.Count == 0) Text(c, T(id, "FrNoOne"), 11, x + 14, y + 34, hw - 28, 28, TextAnchor.MiddleLeft, ColDim, FontReg);
+                int min; if (!_friendMin.TryGetValue(id, out min)) min = _config.FriendRaidMinutes.FirstOrDefault();
+                var opts = _config.FriendRaidMinutes.Take(4).ToList();
+                float sw = (hw - 28 - (opts.Count - 1) * 6) / Mathf.Max(1, opts.Count);
+                for (int i = 0; i < opts.Count; i++)
+                    Btn(c, T(id, "FrMin", opts[i]), "bs.ui fr.min " + opts[i], opts[i] == min ? ColWine : ColBtn, 11, x + 14 + i * (sw + 6), y + 100, sw, 26);
+                Btn(c, T(id, "FrStart"), "bs.ui fr.start", ColRed, 12, x + 14, y + bh - 36, hw - 28, 28);
+            }
+
+            // путь до ТШ
+            float px = x + hw + G;
+            Box(c, ColPanel, px, y, hw, bh, null, UiMain, 12f);
+            Text(c, T(id, "PathTitle"), 12, px + 14, y + 8, hw - 150, 20);
+            Btn(c, T(id, "PathBtn"), "bs.ui raid.path", ColWine, 11, px + hw - 14 - 120, y + 6, 120, 26);
+            PathReport rep;
+            if (_pathReport.TryGetValue(id, out rep))
+            {
+                Text(c, T(id, "PathBest", rep.Dir, rep.Lines.Count, rep.Sulfur), 12, px + 14, y + 38, hw - 28, 20, TextAnchor.MiddleLeft, ColRose);
+                for (int i = 0; i < rep.Lines.Count && i < 5; i++)
+                    Text(c, $"{i + 1}. {rep.Lines[i]}", 10, px + 14, y + 60 + i * 20, hw - 28, 20, TextAnchor.MiddleLeft, ColText, FontReg);
+                if (rep.Lines.Count > 5) Text(c, T(id, "PathMore", rep.Lines.Count - 5), 10, px + 14, y + 160 - 4, hw - 28, 12, TextAnchor.MiddleLeft, ColDim, FontReg);
+            }
+            else Text(c, T(id, "PathHint"), 11, px + 14, y + 38, hw - 28, bh - 50, TextAnchor.UpperLeft, ColDim, FontReg);
+            return y + bh + G;
+        }
+
+        #endregion
+
         #region Интерфейс
 
         private class UiState
@@ -2602,8 +3194,8 @@ namespace Oxide.Plugins
 
         private void CloseUi(BasePlayer player) => CuiHelper.DestroyUi(player, UiMain);
 
-        private static readonly string[] Tabs = { "tools", "library", "zones", "env", "items", "raid", "tp" };
-        private static readonly string[] TabKeys = { "TabTools", "TabLibrary", "TabZones", "TabEnv", "TabItems", "TabRaid", "TabTp" };
+        private static readonly string[] Tabs = { "tools", "library", "zones", "env", "items", "raid", "elec", "spawn", "tp" };
+        private static readonly string[] TabKeys = { "TabTools", "TabLibrary", "TabZones", "TabEnv", "TabItems", "TabRaid", "TabElec", "TabSpawn", "TabTp" };
 
         private void OpenUi(BasePlayer player)
         {
@@ -2647,6 +3239,8 @@ namespace Oxide.Plugins
             {
                 case "items": BuildItems(c, player, ui, cx, Top, cw); break;
                 case "raid": BuildRaid(c, player, cx, Top, cw); break;
+                case "elec": BuildElec(c, player, cx, Top, cw); break;
+                case "spawn": BuildSpawn(c, player, cx, Top, cw); break;
                 case "zones": BuildPlots(c, player, cx, Top, cw); break;
                 case "env": BuildEnv(c, player, cx, Top, cw); break;
                 case "tp": BuildTp(c, player, ui, cx, Top, cw); break;
@@ -3027,10 +3621,10 @@ namespace Oxide.Plugins
             RaidTest test;
             bool active = _raidTests.TryGetValue(id, out test);
 
-            Box(c, "0.66 0.09 0.16 0.18", x, y, w, 104, null, UiMain, 14f);
-            Text(c, T(id, "RaidTitle"), 16, x + 16, y + 12, w - 32, 24, TextAnchor.MiddleCenter);
-            Text(c, T(id, "RaidHint"), 10, x + 16, y + 42, w - 32, 54, TextAnchor.UpperCenter, ColDim, FontReg);
-            y += 104 + G;
+            Box(c, "0.66 0.09 0.16 0.18", x, y, w, 70, null, UiMain, 14f);
+            Text(c, T(id, "RaidTitle"), 15, x + 16, y + 6, w - 32, 22, TextAnchor.MiddleCenter);
+            Text(c, T(id, "RaidHint2"), 10, x + 16, y + 30, w - 32, 36, TextAnchor.UpperCenter, ColDim, FontReg);
+            y += 70 + G;
 
             // блок действий всегда одной высоты — набор ниже не прыгает
             const float actH = 104f;
@@ -3045,15 +3639,16 @@ namespace Oxide.Plugins
                 Btn(c, T(id, "RaidRestore"), "bs.ui raid.restore", ColWine, 14, x, y + 48 + G, hw, 48, ColText, 14f);
                 Btn(c, T(id, "RaidMoreKit"), "bs.ui raid.kit", ColBtn, 13, x + hw + G, y + 48 + G, hw, 48, ColText, 14f);
             }
-            y += actH + G + 4;
+            y += actH + G;
+            y = BuildRaidExtra(c, player, x, y, w);
 
             // рейд-набор: панель до низа, иконки по центру
             float ph = Bottom - y;
             Box(c, ColPanel, x, y, w, ph, null, UiMain, 12f);
             Text(c, T(id, "RaidKitTitle"), 10, x, y + 10, w, 18, TextAnchor.MiddleCenter, ColDim);
             var kit = _config.RaidKit.Select(k => new { k, def = ItemManager.FindItemDefinition(k.Item) }).Where(e => e.def != null).Take(12).ToList();
-            const float iw = 64f;
-            int perRow = Mathf.Min(6, Mathf.Max(1, kit.Count));
+            const float iw = 56f;
+            int perRow = Mathf.Min(10, Mathf.Max(1, kit.Count));
             int kitRows = Mathf.Max(1, Mathf.CeilToInt(kit.Count / (float)perRow));
             float gridH = kitRows * iw + (kitRows - 1) * G;
             float gy = y + (ph - gridH) / 2f;
@@ -3199,6 +3794,36 @@ namespace Oxide.Plugins
             new[] { "TabItems", "ПРЕДМЕТЫ", "ITEMS" },
             new[] { "TabBuild", "СТРОЙКА", "BUILD" },
             new[] { "TabRaid", "РЕЙД-ТЕСТ", "RAID TEST" },
+            new[] { "TabElec", "ЭЛЕКТРИКА", "ELECTRIC" }, new[] { "TabSpawn", "СПАВН", "SPAWN" },
+            new[] { "RaidHint2", "Наведись на базу и начни тест: база сохранится, крафт станет мгновенным и бесплатным. После — одна кнопка вернёт базу. Можно пустить друга рейдить по таймеру и посчитать самый дешёвый путь до шкафа.", "Aim at your base and start: it's saved, crafting becomes instant and free. One button restores it. Let a friend raid on a timer, or find the cheapest path to the TC." },
+            new[] { "FrTitle", "ДРУГ РЕЙДИТ", "FRIEND RAIDS" }, new[] { "FrPick", "Выбери, кого пустить", "Pick who raids" }, new[] { "FrNoOne", "Никого онлайн", "No one online" },
+            new[] { "FrMin", "{0} мин", "{0} min" }, new[] { "FrStart", "ПУСТИТЬ РЕЙДИТЬ", "LET THEM RAID" }, new[] { "FrStop", "ОСТАНОВИТЬ", "STOP" },
+            new[] { "FrActive", "{0} рейдит твою базу\nосталось {1}:{2:00}", "{0} is raiding your base\n{1}:{2:00} left" },
+            new[] { "FrStarted", "{0} может рейдить твою базу {1} мин. Крафт мгновенный.", "{0} may raid your base for {1} min. Crafting is instant." },
+            new[] { "FrInvited", "{0} пустил тебя рейдить свою базу на {1} мин. Крафт мгновенный и бесплатный.", "{0} lets you raid their base for {1} min. Crafting is instant and free." },
+            new[] { "FrTimeUp", "Время рейда вышло", "Raid time is up" }, new[] { "FrStopped", "Рейд с другом остановлен", "Friend raid stopped" },
+            new[] { "PathTitle", "ПУТЬ ДО ШКАФА", "PATH TO TC" }, new[] { "PathBtn", "ПОСЧИТАТЬ", "CALCULATE" },
+            new[] { "PathHint", "Наведись на свою базу и нажми «Посчитать». Проверю 8 сторон и крышу, найду, где до шкафа дешевле всего по сере, и нарисую путь стрелками на 30 секунд.", "Aim at your base and press Calculate: 8 sides and the roof are checked, the cheapest path to the TC by sulfur is drawn for 30 seconds." },
+            new[] { "PathBest", "Дешевле всего: {0} · слоёв {1} · {2} серы", "Cheapest: {0} · {1} layers · {2} sulfur" }, new[] { "PathMore", "…и ещё {0}", "…and {0} more" },
+            new[] { "PathNoTc", "В этой постройке нет шкафа", "No TC in this building" }, new[] { "PathOpen", "До шкафа можно дойти без взрывчатки", "The TC is reachable without explosives" },
+            new[] { "DirN", "север", "north" }, new[] { "DirNE", "северо-восток", "north-east" }, new[] { "DirE", "восток", "east" }, new[] { "DirSE", "юго-восток", "south-east" },
+            new[] { "DirS", "юг", "south" }, new[] { "DirSW", "юго-запад", "south-west" }, new[] { "DirW", "запад", "west" }, new[] { "DirNW", "северо-запад", "north-west" }, new[] { "DirTop", "крыша", "roof" },
+            new[] { "RI_0", "ракет", "rockets" }, new[] { "RI_1", "C4", "C4" }, new[] { "RI_2", "сэтчелей", "satchels" }, new[] { "RI_3", "разрывных", "explo ammo" },
+            new[] { "ElLib", "БИБЛИОТЕКА СХЕМ", "CIRCUIT LIBRARY" }, new[] { "ElPlace", "ПОСТАВИТЬ", "PLACE" },
+            new[] { "ElLibHint", "Схема ставится туда, куда смотришь, и сразу соединяется проводами.", "The circuit is placed where you look and wired up right away." },
+            new[] { "ElMineTitle", "МОИ СХЕМЫ · до {0}", "MY CIRCUITS · up to {0}" }, new[] { "ElCopy", "КОПИРОВАТЬ СХЕМУ (радиус {0} м от прицела)", "COPY CIRCUIT ({0} m around aim)" },
+            new[] { "ElMineEmpty", "Пока пусто. Собери схему, наведись на неё и нажми «Копировать» — детали и провода сохранятся.", "Empty. Build a circuit, aim at it and press Copy — parts and wires are saved." },
+            new[] { "ElMine", "Схема {0}", "Circuit {0}" }, new[] { "ElParts", "дет.", "parts" }, new[] { "ElWires", "пров.", "wires" }, new[] { "ElPaste", "ВСТАВИТЬ", "PASTE" },
+            new[] { "ElLoad", "ПОКАЗ НАГРУЗКИ", "POWER VIEW" }, new[] { "ElLoadHint", "Над каждой деталью в 15 м: сколько ватт приходит, сколько тратит и сколько отдаёт дальше.", "Above every part within 15 m: watts in, used and passed on." },
+            new[] { "ElLoadFmt", "вход {0} · расход {1} · выход {2}", "in {0} · use {1} · out {2}" },
+            new[] { "ElCostBtn", "СТОИМОСТЬ СХЕМЫ (радиус {0} м)", "CIRCUIT COST ({0} m)" }, new[] { "ElCost", "Посчитано деталей: {0}", "Parts counted: {0}" },
+            new[] { "ElNone", "Рядом нет электрики", "No electrics nearby" }, new[] { "ElPlaced", "Поставлено деталей: {0}, проводов: {1}", "Placed {0} parts, {1} wires" }, new[] { "ElCopied", "Сохранено: {0} деталей, {1} проводов", "Saved: {0} parts, {1} wires" },
+            new[] { "SpCat_trees", "ДЕРЕВЬЯ И КУСТЫ", "TREES & BUSHES" }, new[] { "SpCat_ore", "КАМНИ И РУДА", "ROCKS & ORE" }, new[] { "SpCat_loot", "ЯЩИКИ С ЛУТОМ", "LOOT CRATES" }, new[] { "SpCat_npc", "НПС И ТУРЕЛИ", "NPC & TURRETS" },
+            new[] { "SpFoot", "Поставлено тобой: {0} из {1}. Объект появляется там, куда смотришь; убрать — молотком или кнопкой справа.", "Spawned by you: {0} of {1}. Appears where you look; remove with the hammer or the button." },
+            new[] { "SpClear", "УБРАТЬ ВСЁ МОЁ", "REMOVE ALL MINE" }, new[] { "SpLook", "Наведись на землю или постройку", "Aim at the ground or a building" },
+            new[] { "SpLimit", "Предел: {0} объектов", "Limit: {0} objects" }, new[] { "SpBad", "Этот объект не создаётся — проверь префаб в конфиге", "This object can't be spawned — check the prefab in the config" },
+            new[] { "SpDone", "{0} · {1}/{2}", "{0} · {1}/{2}" },
+            new[] { "PlotPvp", "PvP на участке", "PvP on plot" }, new[] { "PvpOn", "На участке «{0}» включён PvP — урон проходит, бессмертия нет", "PvP is ON at {0} — damage is on, no god mode" }, new[] { "PvpOff", "На участке «{0}» PvP выключен", "PvP is OFF at {0}" },
             new[] { "TabPlots", "УЧАСТКИ", "PLOTS" },
             new[] { "TabTp", "ТЕЛЕПОРТ", "TELEPORT" },
             new[] { "TabTools", "ИНСТРУМЕНТЫ", "BUILD TOOLS" },

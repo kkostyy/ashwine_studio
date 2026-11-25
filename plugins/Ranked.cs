@@ -25,7 +25,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Ranked", "Claude", "1.2.0")]
+    [Info("Ranked", "Claude", "1.3.0")]
     [Description("Рейтинговые матчи 1v1–5v5: два ранкеда, MMR, ранги, сезоны, таблица лидеров")]
     public class Ranked : RustPlugin
     {
@@ -115,7 +115,9 @@ namespace Oxide.Plugins
         private const string FontReg = "robotocondensed-regular.ttf";
 
         private static readonly int[] Formats = { 1, 2, 3, 5 };
-        private static readonly string[] Ladders = { "ak", "mix", "t2", "prim" };
+        private static readonly string[] Ladders = { "ak", "mix", "t2", "prim", "bow", "heli" };
+        // вертолёты играются в Minigames (вертолётный ММ), сюда приходит только результат
+        private static bool External(string ladder) => ladder == "heli";
 
         #endregion
 
@@ -226,6 +228,13 @@ namespace Oxide.Plugins
                 new KitDef { Name = "Копьё", Weapon = "spear.wooden" },
             };
             [JsonProperty("Примитив: одежда")] public List<string> PrimWear = new List<string> { "burlap.headwrap", "burlap.shirt", "burlap.trousers", "burlap.shoes" };
+            [JsonProperty("Луки: набор (выдаётся весь)")] public List<KitDef> BowKit = new List<KitDef>
+            {
+                new KitDef { Name = "Лук", Weapon = "bow.hunting", Ammo = "arrow.wooden", AmmoAmount = 48 },
+                new KitDef { Name = "Арбалет", Weapon = "crossbow", Ammo = "arrow.wooden", AmmoAmount = 24 },
+            };
+            [JsonProperty("Луки: одежда")] public List<string> BowWear = new List<string> { "deer.skull.mask", "hide.poncho", "hide.pants", "hide.boots" };
+            [JsonProperty("Режим Hub: луки")] public string HubBow = "ranked_prim";
 
             [JsonProperty("Разные ганы: сеты")] public List<WearDef> MixWear = new List<WearDef>
             {
@@ -248,6 +257,10 @@ namespace Oxide.Plugins
             {
                 Config.Settings.ObjectCreationHandling = ObjectCreationHandling.Replace; _config = Config.ReadObject<Configuration>();
                 if (_config == null || _config.Ranks == null || _config.Ranks.Count == 0) throw new Exception();
+                var def = new Configuration();
+                if (_config.BowKit == null || _config.BowKit.Count == 0) _config.BowKit = def.BowKit;
+                if (_config.BowWear == null) _config.BowWear = def.BowWear;
+                if (string.IsNullOrEmpty(_config.HubBow)) _config.HubBow = def.HubBow;
             }
             catch
             {
@@ -430,9 +443,9 @@ namespace Oxide.Plugins
 
         private bool IsAdmin(BasePlayer p) => p != null && (p.IsAdmin || permission.UserHasPermission(p.UserIDString, PermAdmin));
 
-        private string HubModeFor(string ladder) => ladder == "mix" ? _config.HubMix : ladder == "t2" ? _config.HubT2 : ladder == "prim" ? _config.HubPrim : _config.HubAk;
+        private string HubModeFor(string ladder) => ladder == "mix" ? _config.HubMix : ladder == "t2" ? _config.HubT2 : ladder == "prim" ? _config.HubPrim : ladder == "bow" ? _config.HubBow : _config.HubAk;
 
-        private static string LadderShort(string l) => l == "ak" ? "AK" : l == "mix" ? "MIX" : l == "t2" ? "T2" : "PRIM";
+        private static string LadderShort(string l) => l == "ak" ? "AK" : l == "mix" ? "MIX" : l == "t2" ? "T2" : l == "bow" ? "BOW" : l == "heli" ? "HELI" : "PRIM";
 
         private Entry QueueOf(ulong id) => _queue.FirstOrDefault(e => e.Members.Contains(id));
 
@@ -476,6 +489,15 @@ namespace Oxide.Plugins
             int format; if (!_formatPick.TryGetValue(id, out format)) format = 1;
             if (MatchOf(player) != null) { Toast(player, T(id, "InMatch"), true); return; }
             if (QueueOf(id) != null) { Toast(player, T(id, "AlreadyQueued"), false); return; }
+            if (ladder == "heli")
+            {
+                if (format > 2) { Toast(player, T(id, "HeliFormats"), true); return; }
+                var mg = plugins.Find("Minigames");
+                if (mg == null) { Toast(player, T(id, "HeliNoPlugin"), true); return; }
+                CloseAll(player);
+                mg.Call("HeliQueue", player, format == 1 ? "a1" : "a2", true);
+                return;
+            }
             if (!_data.Arenas.Values.Any(a => a.Enabled && a.Formats.Contains(format) && a.A.Count >= format && a.B.Count >= format))
             { Toast(player, T(id, "NoArenas", format), true); return; }
 
@@ -575,7 +597,7 @@ namespace Oxide.Plugins
 
         private void TryMatch()
         {
-            foreach (var ladder in Ladders)
+            foreach (var ladder in Ladders.Where(l => !External(l)))
                 foreach (var format in Formats)
                 {
                     var q = _queue.Where(e => e.Ladder == ladder && e.Format == format).OrderBy(e => e.Since).ToList();
@@ -680,6 +702,7 @@ namespace Oxide.Plugins
             m.Extras.Clear();
             if (m.Ladder == "mix") { m.Gun = Pick(_config.MixGuns, k => k.Weight); m.Wear = Pick(_config.MixWear, w => w.Weight); }
             else if (m.Ladder == "t2") { m.Gun = Pick(_config.T2Guns, k => k.Weight); m.Wear = new WearDef { Name = T(0, "RoadsignSet"), Wear = _config.T2Wear }; }
+            else if (m.Ladder == "bow") { m.Gun = _config.BowKit[0]; m.Extras.AddRange(_config.BowKit.Skip(1)); m.Wear = new WearDef { Name = "", Wear = _config.BowWear }; }
             else if (m.Ladder == "prim") { m.Gun = _config.PrimKit[0]; m.Extras.AddRange(_config.PrimKit.Skip(1)); m.Wear = new WearDef { Name = "", Wear = _config.PrimWear }; }
             else { m.Gun = _config.AkKit; m.Wear = new WearDef { Name = "", Wear = _config.AkWear }; }
 
@@ -1402,21 +1425,23 @@ namespace Oxide.Plugins
             var R0 = UiMain;
             float top = M + 52 + 2 + M, cw = (W - 2 * M - G) / 2f;
 
-            // четыре ранкеда: калаши, разные ганы, тир 2, примитив
+            // шесть лестниц: калаши, разные ганы, тир 2, примитив, луки, вертолёты — сетка 3×2
+            float lw3 = (W - 2 * M - 2 * G) / 3f;
             for (int i = 0; i < Ladders.Length; i++)
             {
                 var l = Ladders[i];
-                float x = M + (i % 2) * (cw + G), y0 = top + (i / 2) * (72 + 8);
+                float x = M + (i % 3) * (lw3 + G), y0 = top + (i / 3) * (72 + 8);
+                float cwL = lw3;
                 var r = R(id, l, format);
                 var rank = RankOf(r.Mmr);
                 bool a = l == ladder;
-                Box(c, R0, a ? ColWineSoft : ColPanel, x, y0, cw, 72, 16f);
+                Box(c, R0, a ? ColWineSoft : ColPanel, x, y0, cwL, 72, 16f);
                 Badge(c, R0, rank, x + 14, y0 + 14, 44);
-                Text(c, R0, T(id, "L_" + l), 15, x + 70, y0 + 8, cw - 86, 20);
-                Text(c, R0, T(id, "LD_" + l), 10, x + 70, y0 + 28, cw - 86, 16, TextAnchor.MiddleLeft, ColDim, FontReg);
+                Text(c, R0, T(id, "L_" + l), 15, x + 70, y0 + 8, cwL - 86, 20);
+                Text(c, R0, T(id, "LD_" + l), 10, x + 70, y0 + 28, cwL - 86, 16, TextAnchor.MiddleLeft, ColDim, FontReg);
                 int q = _queue.Where(e => e.Ladder == l && e.Format == format).Sum(e => e.Members.Count);
-                Text(c, R0, $"{RankLabel(r.Mmr, id)} · {r.Mmr} MMR   ·   {T(id, "InQueue", q)}", 10, x + 70, y0 + 46, cw - 86, 18, TextAnchor.MiddleLeft, rank.Color);
-                Btn(c, R0, "", "ranked.ui ladder " + l, "0 0 0 0", 10, x, y0, cw, 72, ColText, 0f);
+                Text(c, R0, External(l) ? $"{RankLabel(r.Mmr, id)} · {r.Mmr} MMR" : $"{RankLabel(r.Mmr, id)} · {r.Mmr} · {T(id, "InQueue", q)}", 10, x + 70, y0 + 46, cwL - 86, 18, TextAnchor.MiddleLeft, rank.Color);
+                Btn(c, R0, "", "ranked.ui ladder " + l, "0 0 0 0", 10, x, y0, cwL, 72, ColText, 0f);
             }
             top += 2 * 72 + 8 + G;
             Text(c, R0, T(id, "Format"), 10, M, top, 200, 16, TextAnchor.MiddleLeft, ColDim); top += 22;
@@ -1461,8 +1486,8 @@ namespace Oxide.Plugins
             }
             else
             {
-                Text(c, R0, T(id, "ReadyText"), 12, rx + 14, top + 14, cw - 28, ph - 90, TextAnchor.MiddleCenter, ColDim, FontReg);
-                Btn(c, R0, T(id, "FindMatch"), "ranked.ui join", ColWine, 15, rx + 14, top + ph - 58, cw - 28, 44, ColText, 14f);
+                Text(c, R0, T(id, ladder == "heli" ? "HeliReady" : "ReadyText"), 12, rx + 14, top + 14, cw - 28, ph - 90, TextAnchor.MiddleCenter, ColDim, FontReg);
+                Btn(c, R0, T(id, ladder == "heli" ? "FindHeli" : "FindMatch"), "ranked.ui join", ColWine, 15, rx + 14, top + ph - 58, cw - 28, 44, ColText, 14f);
             }
 
             Btn(c, R0, T(id, "TopBtn"), "ranked.ui top", ColBtn, 11, W - M - 40 - G - 120, M + 4, 120, 32, ColText, 10f);
@@ -1673,7 +1698,7 @@ namespace Oxide.Plugins
             var R0 = UiMain;
             float top = M + 52 + 2 + M;
             float half = (W - 2 * M - G) / 2f;
-            Seg(c, R0, M, top, half, 34, Ladders.Select(l => new[] { l, T(id, "L_" + l), "ranked.ui top " + Key(l, format) }).ToList(), ladder);
+            Seg(c, R0, M, top, half, 34, Ladders.Select(l => new[] { l, T(id, "L_" + l), "ranked.ui top " + Key(l, format) }).ToList(), ladder, 11);
             Seg(c, R0, M + half + G, top, half, 34, Formats.Select(f => new[] { f.ToString(), $"{f}v{f}", "ranked.ui top " + Key(ladder, f) }).ToList(), format.ToString());
             top += 34 + G;
             float ph = H - M - 46 - G - top, lw = (W - 2 * M - G) * 0.62f, rw = W - 2 * M - G - lw;
@@ -1792,6 +1817,44 @@ namespace Oxide.Plugins
             return h(p[0]) + h(p[1]) + h(p[2]);
         }
 
+        [HookMethod("GetLadderMmr")]
+        public int GetLadderMmr(ulong id, string ladder, int format) => R(id, ladder, format).Mmr;
+
+        // результат матча, сыгранного в другом плагине (вертолётный ММ) — считаем MMR так же, как у себя
+        [HookMethod("ReportExternal")]
+        public Dictionary<ulong, int> ReportExternal(string ladder, int format, List<ulong> winners, List<ulong> losers, string score)
+        {
+            var deltas = new Dictionary<ulong, int>();
+            if (winners == null || losers == null || winners.Count == 0 || losers.Count == 0) return deltas;
+            var teams = new[] { winners, losers };
+            int[] avg = { Mathf.RoundToInt((float)winners.Average(x => R(x, ladder, format).Mmr)), Mathf.RoundToInt((float)losers.Average(x => R(x, ladder, format).Mmr)) };
+            for (int t = 0; t < 2; t++)
+                foreach (var id in teams[t])
+                {
+                    var r = R(id, ladder, format);
+                    bool win = t == 0;
+                    float expected = 1f / (1f + Mathf.Pow(10f, (avg[1 - t] - r.Mmr) / 400f));
+                    int k = r.Matches < 10 ? _config.KNew : _config.K;
+                    int delta = Mathf.RoundToInt(k * ((win ? 1f : 0f) - expected));
+                    if (win && delta < 5) delta = 5;
+                    if (!win && delta > -5) delta = -5;
+                    r.Mmr = Mathf.Max(0, r.Mmr + delta);
+                    r.Peak = Mathf.Max(r.Peak, r.Mmr);
+                    r.Matches++;
+                    if (win) { r.Wins++; Ach(id, "ranked_wins"); } else r.Losses++;
+                    AchMax(id, "ranked_rank", _config.Ranks.OrderBy(x => x.From).ToList().IndexOf(RankOf(r.Mmr)));
+                    deltas[id] = delta;
+                    var d = D(id);
+                    var sc = score ?? "";
+                    if (!win && sc.Contains(":")) { var pr = sc.Split(':'); sc = pr[1] + ":" + pr[0]; }
+                    d.History.Insert(0, new MatchLog { Ladder = ladder, Format = format, Win = win, Score = sc, Delta = delta, Date = DateTime.UtcNow.ToString("MM-dd HH:mm") });
+                    if (d.History.Count > 20) d.History.RemoveRange(20, d.History.Count - 20);
+                }
+            _dirty = true;
+            SaveData();
+            return deltas;
+        }
+
         [HookMethod("GetRank")]
         public string GetRank(ulong id, string ladder, int format)
         {
@@ -1848,6 +1911,12 @@ namespace Oxide.Plugins
             new[] { "LD_ak", "АК + одинаковый сет у всех", "AK and the same kit for everyone" },
             new[] { "LD_mix", "каждый раунд случайная пушка и сет", "random gun and kit every round" },
             new[] { "L_t2", "Тир 2", "Tier 2" }, new[] { "LD_t2", "Томпсон, MP5, SAR · дорожная броня", "Thompson, MP5, SAR · roadsign armor" },
+            new[] { "L_bow", "Луки", "Bows" }, new[] { "LD_bow", "лук и арбалет, шкурный сет", "bow & crossbow, hide set" },
+            new[] { "L_heli", "Вертолёты", "Helicopters" }, new[] { "LD_heli", "атак-хели и мини · до 3 побед", "attack heli & mini · first to 3" },
+            new[] { "HeliReady", "Вертолётные бои идут в мини-играх: 1v1 — атак-хели один на один, 2v2 — пилот и стрелок (атак-хели или мини с ракетами). Рейтинг считается здесь.", "Heli fights run in Minigames: 1v1 attack heli, 2v2 pilot + gunner. Rating is counted here." },
+            new[] { "FindHeli", "ИСКАТЬ ВЕРТОЛЁТНЫЙ БОЙ", "FIND HELI FIGHT" },
+            new[] { "HeliFormats", "Вертолёты: только 1v1 и 2v2", "Helicopters: 1v1 and 2v2 only" },
+            new[] { "HeliNoPlugin", "Плагин Minigames не загружен", "Minigames plugin is not loaded" },
             new[] { "L_prim", "Примитив", "Primitive" }, new[] { "LD_prim", "луки, арбалет, Eoka, револьвер, копьё", "bows, crossbow, Eoka, revolver, spear" },
             new[] { "RoadsignSet", "роадсайн", "roadsign" },
             new[] { "HallOfFame", "ЗАЛ СЛАВЫ", "HALL OF FAME" }, new[] { "HallEmpty", "Сезоны ещё не завершались — первые чемпионы появятся здесь", "No finished seasons yet" },
