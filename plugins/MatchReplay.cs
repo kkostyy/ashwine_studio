@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using Newtonsoft.Json;
 using Oxide.Core;
+using Oxide.Core.Plugins;
 using Oxide.Game.Rust.Cui;
 using UnityEngine;
 
@@ -11,7 +12,7 @@ namespace Oxide.Plugins
 {
     // Запись матчей ранкеда и дуэлей: позиции игроков 5 раз в секунду, выстрелы, смерти.
     // Просмотр — только для смотрящего (ddraw), без ботов на сервере: арена может быть занята.
-    [Info("MatchReplay", "Claude", "1.1.0")]
+    [Info("MatchReplay", "Claude", "1.1.1")]
     [Description("Records ranked/arena matches and plays them back privately for the viewer")]
     public class MatchReplay : RustPlugin
     {

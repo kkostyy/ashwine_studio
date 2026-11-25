@@ -41,7 +41,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("BuildServer", "Claude", "1.3.1")]
+    [Info("BuildServer", "Claude", "1.3.2")]
     [Description("Набор функций билд/креатив-сервера: полёт, предметы, стройка, рейд-тест, участки, телепорты")]
     public class BuildServer : RustPlugin
     {
@@ -2847,7 +2847,7 @@ namespace Oxide.Plugins
             }
             for (int a = 0; a < ents.Count; a++)
             {
-                var outs = ents[a].outputs ?? new IOSlot[0];
+                var outs = ents[a].outputs ?? new IOEntity.IOSlot[0];
                 for (int s = 0; s < outs.Length; s++)
                 {
                     var to = outs[s].connectedTo?.Get(true);
