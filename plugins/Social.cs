@@ -25,7 +25,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Social", "Claude", "1.1.0")]
+    [Info("Social", "Claude", "1.2.0")]
     [Description("Пати, кланы с рейтингом, турниры с сеткой и режим зрителя")]
     public class Social : RustPlugin
     {
@@ -126,6 +126,7 @@ namespace Oxide.Plugins
             [JsonProperty("Турнир: побед в матче по умолчанию")] public int TourRounds = 3;
             [JsonProperty("Турнир: доля приза за 2-е место")] public float SecondShare = 0.3f;
             [JsonProperty("Зритель: только матчи (иначе любого игрока)")] public bool SpecOnlyMatches = true;
+            [JsonProperty("Зритель: свободная камера (debugcamera)")] public bool SpecFreeCam = true;
             [JsonProperty("Скруглённые углы интерфейса")] public bool RoundedCorners = true;
         }
 
@@ -678,7 +679,7 @@ namespace Oxide.Plugins
 
         #region Режим зрителя
 
-        private class SpecState { public ulong Target; public Vector3 Back; }
+        private class SpecState { public ulong Target; public Vector3 Back; public bool Free; }
         private readonly Dictionary<ulong, SpecState> _spec = new Dictionary<ulong, SpecState>();
 
         private static object Call(object target, string method, params object[] args)
@@ -723,6 +724,7 @@ namespace Oxide.Plugins
                 player.inventory.Strip();
                 Call(player, "StartSpectating");
             }
+            if (s.Free) SetFree(player, s, false);
             s.Target = target;
             Call(player, "UpdateSpectateTarget", t.UserIDString);
             CloseAll(player);
@@ -734,6 +736,7 @@ namespace Oxide.Plugins
             SpecState s;
             if (!_spec.TryGetValue(Id(player), out s)) return;
             _spec.Remove(Id(player));
+            if (s.Free) SetFree(player, s, false);
             Call(player, "StopSpectating");
             CuiHelper.DestroyUi(player, UiSpec);
             CuiHelper.DestroyUi(player, UiSpec + ".hp");
@@ -753,6 +756,38 @@ namespace Oxide.Plugins
             int idx = list.IndexOf(s.Target);
             idx = ((idx < 0 ? 0 : idx + dir) % list.Count + list.Count) % list.Count;
             StartSpec(player, list[idx]);
+        }
+
+        // свободная камера: клиентская debugcamera, на время — флаг админа (только у зрителя без инвентаря)
+        private void SetFree(BasePlayer player, SpecState s, bool on)
+        {
+            if (on == s.Free) return;
+            s.Free = on;
+            bool wasAdmin = player.IsAdmin || player.net?.connection?.authLevel > 0;
+            if (on)
+            {
+                if (!wasAdmin) player.SetPlayerFlag(BasePlayer.PlayerFlags.IsAdmin, true);
+                player.SendConsoleCommand("debugcamera");
+            }
+            else
+            {
+                player.SendConsoleCommand("debugcamera");
+                if (player.net?.connection == null || player.net.connection.authLevel == 0)
+                {
+                    var p = player;
+                    timer.Once(0.3f, () => { if (p != null) p.SetPlayerFlag(BasePlayer.PlayerFlags.IsAdmin, false); });
+                }
+            }
+            DrawSpec(player);
+        }
+
+        // матч, в котором сейчас цель: игроки, команды, счёт
+        private Dictionary<string, object> MatchOf(ulong target)
+        {
+            var live = Arenas?.Call("GetLiveMatches") as List<Dictionary<string, object>>;
+            if (live == null) return null;
+            foreach (var m in live) { var ps = m["players"] as List<ulong>; if (ps != null && ps.Contains(target)) return m; }
+            return null;
         }
 
         private void SpecTick()
@@ -866,6 +901,12 @@ namespace Oxide.Plugins
                 case "spec.next": SpecStep(player, 1); break;
                 case "spec.prev": SpecStep(player, -1); break;
                 case "spec.stop": StopSpec(player); break;
+                case "spec.free":
+                {
+                    SpecState ss;
+                    if (_config.SpecFreeCam && _spec.TryGetValue(id, out ss)) SetFree(player, ss, !ss.Free);
+                    break;
+                }
             }
         }
 
@@ -1169,37 +1210,7 @@ namespace Oxide.Plugins
             }
             else
             {
-                // сетка: колонки раундов, слоты по центру своих пар
-                int rounds = t.Bracket.Count;
-                float colW = (W - 2 * M - 24 - (rounds - 1) * 16f) / rounds;
-                float areaH = ph - 40;
-                for (int r = 0; r < rounds; r++)
-                {
-                    var col = t.Bracket[r];
-                    float x = M + 12 + r * (colW + 16f);
-                    Text(c, UiMain, r == rounds - 1 ? T(id, "Final") : r == rounds - 2 && rounds > 1 ? T(id, "Semi") : T(id, "RoundN", r + 1), 10, x, top + 10, colW, 16, TextAnchor.MiddleCenter, ColDim);
-                    float slot = areaH / col.Count;
-                    float mh = Mathf.Min(58f, slot - 6f);
-                    for (int i = 0; i < col.Count; i++)
-                    {
-                        var m = col[i];
-                        float y = top + 34 + i * slot + (slot - mh) / 2f;
-                        bool live = m.State == "live";
-                        Box(c, UiMain, live ? "0.48 0.07 0.14 0.25" : ColRow, x, y, colW, mh, 10f);
-                        float lh = (mh - 6f) / 2f;
-                        for (int k = 0; k < 2; k++)
-                        {
-                            ulong pid = k == 0 ? m.A : m.B;
-                            bool won = m.State == "done" && m.Winner == pid && pid != 0UL;
-                            bool lost = m.State == "done" && m.Winner != pid;
-                            string nm = pid == 0UL ? (r == 0 ? T(id, "Bye") : "?") : EntryName(t, pid);
-                            if (won) Box(c, UiMain, "0.50 0.83 0.60 0.15", x + 3, y + 3 + k * lh, colW - 6, lh, 7f);
-                            Text(c, UiMain, nm, mh < 40 ? 10 : 12, x + 10, y + 3 + k * lh, colW - 20, lh, TextAnchor.MiddleLeft, lost ? ColDim : won ? ColGreen : Members(t, pid).Contains(id) ? ColRose : ColText, won ? Font : FontReg);
-                        }
-                        if (m.State == "done" && !string.IsNullOrEmpty(m.Score)) Text(c, UiMain, m.Score, 10, x, y, colW - 8, mh, TextAnchor.MiddleRight, ColDim);
-                        if (live) Text(c, UiMain, T(id, "Live"), 9, x, y + mh - 2, colW, 12, TextAnchor.MiddleCenter, ColRose, FontReg);
-                    }
-                }
+                DrawBracket(c, id, t, top, ph);
                 if (t.State == "finished") Text(c, UiMain, T(id, "Champion", EntryName(t, t.Champion)), 14, M, top + ph - 34, W - 2 * M, 24, TextAnchor.MiddleCenter, ColGold);
             }
 
@@ -1210,6 +1221,82 @@ namespace Oxide.Plugins
             Btn(c, UiMain, T(id, "WatchMatches"), "social.ui spec.list", ColBtn, 13, M + bw + G, by, bw, 46, ColText, 14f);
             DestroyWindow(player, UiMain);
             AddUiScaled(player, c);
+        }
+
+        // сетка турнира: до 8 участников — слева направо; 16/32 — зеркально, обе половины сходятся к финалу в центре
+        private void DrawBracket(CuiElementContainer c, ulong id, Tournament t, float top, float ph)
+        {
+            int rounds = t.Bracket.Count;
+            if (rounds == 0) return;
+            bool mirror = rounds >= 4;
+            var cols = new List<int[]>(); // {round, side: -1 левая/обычная, 0 финал, 1 правая}
+            if (!mirror) for (int r = 0; r < rounds; r++) cols.Add(new[] { r, -1 });
+            else
+            {
+                for (int r = 0; r < rounds - 1; r++) cols.Add(new[] { r, -1 });
+                cols.Add(new[] { rounds - 1, 0 });
+                for (int r = rounds - 2; r >= 0; r--) cols.Add(new[] { r, 1 });
+            }
+            float gap = mirror ? 12f : 18f;
+            float colW = (W - 2 * M - 24 - (cols.Count - 1) * gap) / cols.Count;
+            float areaH = ph - 40 - (t.State == "finished" ? 30 : 0), y0 = top + 34;
+            int fs = cols.Count >= 9 ? 9 : cols.Count >= 7 ? 10 : 12;
+            const string Line = "1 1 1 0.12";
+
+            Func<int, int, int[]> shown = (r, side) =>
+            {
+                int n = t.Bracket[r].Count;
+                if (side == -1 && mirror) return new[] { 0, n / 2 };
+                if (side == 1) return new[] { n / 2, n - n / 2 };
+                return new[] { 0, n };
+            };
+            Func<int, int, int, float> yc = (r, side, i) =>
+            {
+                var sh = shown(r, side);
+                float slot = areaH / Mathf.Max(1, sh[1]);
+                return y0 + (i - sh[0]) * slot + slot / 2f;
+            };
+
+            for (int ci = 0; ci < cols.Count; ci++)
+            {
+                int r = cols[ci][0], side = cols[ci][1];
+                float x = M + 12 + ci * (colW + gap);
+                string head = r == rounds - 1 ? T(id, "Final") : r == rounds - 2 && rounds > 1 ? T(id, "Semi") : T(id, "RoundN", r + 1);
+                Text(c, UiMain, head, fs, x, top + 10, colW, 16, TextAnchor.MiddleCenter, r == rounds - 1 ? ColGold : ColDim);
+                var sh = shown(r, side);
+                float slot = areaH / Mathf.Max(1, sh[1]);
+                float mh = Mathf.Min(r == rounds - 1 && mirror ? 64f : 58f, slot - 6f);
+                for (int i = sh[0]; i < sh[0] + sh[1]; i++)
+                {
+                    var m = t.Bracket[r][i];
+                    float cy = yc(r, side, i), y = cy - mh / 2f;
+                    // линии к следующему раунду
+                    if (r < rounds - 1)
+                    {
+                        int nside = mirror && r + 1 == rounds - 1 ? 0 : side;
+                        float ny = yc(r + 1, nside, i / 2);
+                        bool toRight = side != 1;
+                        float ex = toRight ? x + colW : x, mx = toRight ? ex + gap / 2f : ex - gap / 2f;
+                        Box(c, UiMain, Line, Mathf.Min(ex, mx), cy - 0.5f, gap / 2f, 1, 0f);
+                        Box(c, UiMain, Line, mx - 0.5f, Mathf.Min(cy, ny), 1, Mathf.Abs(ny - cy) + 1, 0f);
+                        Box(c, UiMain, Line, toRight ? mx : mx - gap / 2f, ny - 0.5f, gap / 2f, 1, 0f);
+                    }
+                    bool live = m.State == "live";
+                    Box(c, UiMain, live ? "0.48 0.07 0.14 0.25" : r == rounds - 1 ? "0.91 0.77 0.42 0.06" : ColRow, x, y, colW, mh, mh < 36 ? 6f : 10f);
+                    float lh = (mh - 4f) / 2f;
+                    for (int k = 0; k < 2; k++)
+                    {
+                        ulong pid = k == 0 ? m.A : m.B;
+                        bool won = m.State == "done" && m.Winner == pid && pid != 0UL;
+                        bool lost = m.State == "done" && m.Winner != pid;
+                        string nm = pid == 0UL ? (r == 0 ? T(id, "Bye") : "?") : EntryName(t, pid);
+                        if (won) Box(c, UiMain, "0.50 0.83 0.60 0.15", x + 2, y + 2 + k * lh, colW - 4, lh, mh < 36 ? 4f : 7f);
+                        Text(c, UiMain, nm, mh < 40 ? Mathf.Min(fs, 10) : fs, x + 7, y + 2 + k * lh, colW - (m.State == "done" ? 30 : 12), lh, TextAnchor.MiddleLeft, lost ? ColDim : won ? ColGreen : Members(t, pid).Contains(id) ? ColRose : ColText, won ? Font : FontReg);
+                    }
+                    if (m.State == "done" && !string.IsNullOrEmpty(m.Score)) Text(c, UiMain, m.Score, 9, x, y, colW - 5, mh, TextAnchor.MiddleRight, ColDim, FontReg);
+                    if (live) Text(c, UiMain, T(id, "Live"), 8, x, y + mh - 1, colW, 11, TextAnchor.MiddleCenter, ColRose, FontReg);
+                }
+            }
         }
 
         #endregion
@@ -1260,21 +1347,66 @@ namespace Oxide.Plugins
             if (!_spec.TryGetValue(id, out s)) return;
             var t = BasePlayer.FindByID(s.Target);
             var c = new CuiElementContainer();
-            const float bw = 560f;
+            // нижняя панель: < цель > · матчи · своб. камера · выход
+            float bw = _config.SpecFreeCam ? 676f : 560f;
             Root(c, UiSpec, "Overlay", ColHud, "0.5 0", "0.5 0", $"{-bw / 2f} 24", $"{bw / 2f} 78", 18f, true);
             Btn(c, UiSpec, "<", "social.ui spec.prev", ColBtn, 15, 10, 10, 40, 34, ColText, 11f);
-            Box(c, UiSpec, ColWineSoft, 56, 10, 220, 34, 11f);
-            Text(c, UiSpec, t != null ? t.displayName : "—", 13, 56, 10, 220, 34, TextAnchor.MiddleCenter);
+            Box(c, UiSpec, s.Free ? ColRow : ColWineSoft, 56, 10, 220, 34, 11f);
+            Text(c, UiSpec, s.Free ? T(id, "FreeCamOn") : t != null ? t.displayName : "—", 13, 56, 10, 220, 34, TextAnchor.MiddleCenter, s.Free ? ColDim : ColText);
             Btn(c, UiSpec, ">", "social.ui spec.next", ColBtn, 15, 282, 10, 40, 34, ColText, 11f);
             Btn(c, UiSpec, T(id, "Matches"), "social.ui spec.list", ColBtn, 11, 332, 10, 106, 34, ColText, 11f);
-            Btn(c, UiSpec, T(id, "Exit"), "social.ui spec.stop", ColBtn, 11, 444, 10, 106, 34, ColText, 11f);
-            if (t != null)
+            float ex = 444;
+            if (_config.SpecFreeCam) { Btn(c, UiSpec, T(id, "FreeCam"), "social.ui spec.free", s.Free ? ColWine : ColBtn, 11, 444, 10, 110, 34, ColText, 11f); ex = 560; }
+            Btn(c, UiSpec, T(id, "Exit"), "social.ui spec.stop", ColBtn, 11, ex, 10, 106, 34, ColText, 11f);
+
+            // справа сверху: состав матча — ХП, оружие, счёт; клик — смотреть этого игрока
+            var m = MatchOf(s.Target);
+            var ps = m?["players"] as List<ulong>;
+            var teams = m != null && m.ContainsKey("teams") ? m["teams"] as List<int> : null;
+            var roster = new List<ulong>();
+            if (ps != null) roster.AddRange(ps.Where(x => BasePlayer.FindByID(x) != null));
+            else if (t != null) roster.Add(s.Target);
+            if (roster.Count > 0)
             {
-                Root(c, UiSpec + ".hp", "Hud", ColHud, "1 1", "1 1", "-216 -72", "-16 -16", 16f, false);
-                Text(c, UiSpec + ".hp", t.displayName, 12, 12, 6, 120, 20, TextAnchor.MiddleLeft);
-                Text(c, UiSpec + ".hp", Mathf.RoundToInt(t.health) + " HP", 12, 120, 6, 68, 20, TextAnchor.MiddleRight, ColGreen);
-                Box(c, UiSpec + ".hp", "1 1 1 0.08", 12, 32, 176, 6, 3f);
-                Box(c, UiSpec + ".hp", ColRed, 12, 32, Mathf.Max(6f, 176f * Mathf.Clamp01(t.health / 100f)), 6, 3f);
+                const float pw = 300f, rh = 34f;
+                int n0 = teams == null ? roster.Count : roster.Count(x => teams[ps.IndexOf(x)] == 0);
+                bool split = teams != null && n0 > 0 && n0 < roster.Count;
+                float ph = 46 + roster.Count * (rh + 4) + (split ? 40 : 0) + 6;
+                Root(c, UiSpec + ".hp", "Hud", ColHud, "1 1", "1 1", $"{-pw - 16} {-16 - ph}", "-16 -16", 16f, false);
+                if (m != null)
+                {
+                    Text(c, UiSpec + ".hp", m["arena"] as string ?? "", 10, 12, 8, pw - 90, 14, TextAnchor.MiddleLeft, ColDim, FontReg);
+                    Text(c, UiSpec + ".hp", m["score"] as string ?? "", 20, pw - 90, 6, 78, 30, TextAnchor.MiddleRight, ColGold);
+                    Text(c, UiSpec + ".hp", T(id, "Live"), 9, 12, 22, 60, 14, TextAnchor.MiddleLeft, ColRose, FontReg);
+                }
+                else Text(c, UiSpec + ".hp", T(id, "Watching"), 10, 12, 8, pw - 24, 28, TextAnchor.MiddleLeft, ColDim, FontReg);
+                float y = 46;
+                var order = teams == null ? roster : roster.OrderBy(x => teams[ps.IndexOf(x)]).ToList();
+                int prevTeam = -1;
+                foreach (var pid in order)
+                {
+                    var bp = BasePlayer.FindByID(pid);
+                    int team = teams == null ? 0 : teams[ps.IndexOf(pid)];
+                    if (split && team != prevTeam)
+                    {
+                        if (prevTeam >= 0) y += 4;
+                        Box(c, UiSpec + ".hp", team == 0 ? ColWine : "0.25 0.45 0.75 1", 12, y + 6, 4, 10, 2f);
+                        Text(c, UiSpec + ".hp", T(id, team == 0 ? "TeamA" : "TeamB"), 9, 22, y + 2, 120, 18, TextAnchor.MiddleLeft, ColDim, FontReg);
+                        y += 18; prevTeam = team;
+                    }
+                    bool cur = pid == s.Target && !s.Free;
+                    bool dead = bp.IsDead() || bp.IsWounded();
+                    Box(c, UiSpec + ".hp", cur ? ColWineSoft : ColRow, 8, y, pw - 16, rh, 9f);
+                    Text(c, UiSpec + ".hp", bp.displayName, 12, 18, y + 1, 150, 18, TextAnchor.MiddleLeft, dead ? ColDim : ColText);
+                    var item = bp.GetActiveItem();
+                    Text(c, UiSpec + ".hp", dead ? T(id, "Dead") : item != null ? item.info.displayName.english : "—", 9, 18, y + 17, 150, 14, TextAnchor.MiddleLeft, ColDim, FontReg);
+                    float hp = dead ? 0f : bp.health;
+                    Text(c, UiSpec + ".hp", Mathf.RoundToInt(hp).ToString(), 12, pw - 70, y + 1, 46, 18, TextAnchor.MiddleRight, hp > 50 ? ColGreen : hp > 25 ? ColGold : ColRed);
+                    Box(c, UiSpec + ".hp", "1 1 1 0.08", 176, y + 22, pw - 200, 4, 2f);
+                    if (hp > 0) Box(c, UiSpec + ".hp", hp > 50 ? ColGreen : hp > 25 ? ColGold : ColRed, 176, y + 22, Mathf.Max(4f, (pw - 200) * Mathf.Clamp01(hp / 100f)), 4, 2f);
+                    if (!cur) c.Add(new CuiButton { Button = { Command = "social.ui spec " + pid, Color = "0 0 0 0" }, Text = { Text = "" }, RectTransform = { AnchorMin = "0 1", AnchorMax = "0 1", OffsetMin = $"8 {-y - rh}", OffsetMax = $"{pw - 8} {-y}" } }, UiSpec + ".hp");
+                    y += rh + 4;
+                }
             }
             CuiHelper.DestroyUi(player, UiSpec);
             CuiHelper.DestroyUi(player, UiSpec + ".hp");
@@ -1391,7 +1523,9 @@ namespace Oxide.Plugins
             new[] { "SpecTitle", "СМОТРЕТЬ", "SPECTATE" }, new[] { "SpecSub", "идущие матчи · /spec · стрелки переключают игрока", "live matches · /spec · arrows switch player" },
             new[] { "Watch", "СМОТРЕТЬ", "WATCH" }, new[] { "NothingLive", "Сейчас никто не играет матч", "No live matches" },
             new[] { "Matches", "Матчи", "Matches" }, new[] { "Exit", "Выйти", "Exit" },
-            new[] { "NothingToWatch", "Некого смотреть", "Nothing to watch" }, new[] { "CantWatch", "Этого игрока сейчас нельзя смотреть", "Can't spectate this player now" },
+            new[] { "NothingToWatch", "Некого смотреть", "Nothing to watch" },
+            new[] { "FreeCam", "Своб. камера", "Free cam" }, new[] { "FreeCamOn", "свободная камера", "free camera" }, new[] { "Watching", "Наблюдение", "Spectating" },
+            new[] { "TeamA", "Команда A", "Team A" }, new[] { "TeamB", "Команда B", "Team B" }, new[] { "Dead", "мёртв", "dead" }, new[] { "CantWatch", "Этого игрока сейчас нельзя смотреть", "Can't spectate this player now" },
             new[] { "InCombat", "Нельзя: ты в бою", "Can't: you're in combat" }, new[] { "LeaveArenaFirst", "Сначала выйди с арены (/arena leave)", "Leave the arena first" },
         };
 

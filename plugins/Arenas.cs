@@ -27,7 +27,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Arenas", "Claude", "1.3.2")]
+    [Info("Arenas", "Claude", "1.3.3")]
     [Description("FFA, TDM, ган-гейм, дуэли и свои арены с экраном смерти, киллфидом и статистикой")]
     public class Arenas : RustPlugin
     {
@@ -2490,7 +2490,8 @@ namespace Oxide.Plugins
             return _sessions.Values.Where(s => s.Kind == "match" && s.State != "waiting" && s.State != "ended").Select(s => new Dictionary<string, object>
             {
                 ["id"] = s.Id, ["arena"] = s.Arena.Name, ["a"] = NamesOfTeam(s, 0), ["b"] = NamesOfTeam(s, 1),
-                ["score"] = s.Score[0] + ":" + s.Score[1], ["players"] = s.Players.ToList(), ["tag"] = s.Tag ?? ""
+                ["score"] = s.Score[0] + ":" + s.Score[1], ["players"] = s.Players.ToList(), ["tag"] = s.Tag ?? "",
+                ["teams"] = s.Players.Select(x => s.Team.ContainsKey(x) ? s.Team[x] : 0).ToList()
             }).ToList();
         }
 
