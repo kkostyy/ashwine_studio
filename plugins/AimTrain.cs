@@ -26,7 +26,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("AimTrain", "Claude", "1.3.0")]
+    [Info("AimTrain", "Claude", "1.3.1")]
     [Description("Аим-трен: мишени, стрейферы, стрелки, бот-зеркало; фейсчеки против игрока и бота")]
     public class AimTrain : RustPlugin
     {
@@ -1227,6 +1227,19 @@ namespace Oxide.Plugins
         private void CmdAim(BasePlayer player, string c, string[] a)
         {
             if (a.Length > 0 && (a[0] == "stop" || a[0] == "leave")) { StopAim(player, true); return; }
+            if (a.Length > 0 && AimModes.Contains(a[0]))
+            {
+                // из меню хаба: плашка режима — сразу выбираем его
+                var p = Pf(Id(player));
+                p.Mode = a[0];
+                FixWeapon(p);
+                if (Hub != null && !string.IsNullOrEmpty(_config.HubAim) && HubMode(player) != _config.HubAim)
+                {
+                    Hub.Call("SendToMode", player, _config.HubAim, false);
+                    timer.Once(1.2f, () => { if (player != null && player.IsConnected) OpenAimMenu(player); });
+                    return;
+                }
+            }
             OpenAimMenu(player);
         }
 

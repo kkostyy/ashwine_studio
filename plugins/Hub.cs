@@ -50,7 +50,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Hub", "Claude", "1.4.0")]
+    [Info("Hub", "Claude", "1.4.1")]
     [Description("Хаб-сервер: табличка, лобби, режимы, порталы, NPC, инвентарь на режим, монеты, профиль")]
     public class Hub : RustPlugin
     {
@@ -2143,52 +2143,62 @@ namespace Oxide.Plugins
         }
 
         // ---------- Аим-трен
+        // каждый режим аим-трена — своя плашка: [режим AimTrain, иконка, команда чата]
+        private static readonly string[][] AimCards =
+        {
+            new[] { "targets", "aim", "aim targets" }, new[] { "strafers", "group", "aim strafers" }, new[] { "flow", "star", "aim flow" },
+            new[] { "shooters", "arena", "aim shooters" }, new[] { "mirror", "eye", "aim mirror" }, new[] { "bow", "flag", "aim bow" },
+            new[] { "fcbot", "lock", "aim fcbot" }, new[] { "facecheck", "group", "fc" },
+        };
+
         private void PageAim(CuiElementContainer c, BasePlayer player)
         {
             var id = Id(player);
             const string R = UiMain;
-            const float LW = 600f, RX = CX + LW + 12f, RW = CW - LW - 12f;
-            BBox(c, R, "0.639 0.086 0.184 0.08", "0.941 0.651 0.694 0.23", CX, CY, LW, 132, 19f);
-            Text(c, R, "A / W", 80, CX + LW - 300, CY + 40, 290, 92, TextAnchor.LowerRight, "0.941 0.651 0.694 0.035");
-            Text(c, R, T(id, "AimCap").ToUpper(), 11, CX + 22, CY + 20, LW - 44, 16, TextAnchor.MiddleLeft, MPink);
-            Text(c, R, T(id, "AimTitle"), 28, CX + 22, CY + 38, LW - 44, 38, TextAnchor.MiddleLeft, MInk);
-            Text(c, R, T(id, "AimSub"), 13, CX + 22, CY + 80, LW - 44, 18, TextAnchor.MiddleLeft, MMuted, FontReg);
+            // шапка
+            BBox(c, R, "0.639 0.086 0.184 0.08", "0.941 0.651 0.694 0.23", CX, CY, CW, 96, 19f);
+            Text(c, R, "A / W", 72, CX + CW - 300, CY + 18, 290, 78, TextAnchor.LowerRight, "0.941 0.651 0.694 0.035");
+            Text(c, R, T(id, "AimCap").ToUpper(), 11, CX + 22, CY + 14, CW - 44, 16, TextAnchor.MiddleLeft, MPink);
+            Text(c, R, T(id, "AimTitle"), 24, CX + 22, CY + 32, CW - 300, 32, TextAnchor.MiddleLeft, MInk);
+            Text(c, R, T(id, "AimSub2"), 12, CX + 22, CY + 66, CW - 300, 18, TextAnchor.MiddleLeft, MMuted, FontReg);
+            var aimMode = Mode("aim");
+            int online = (aimMode != null ? GetModeOnline(aimMode.Id) : 0) + (Mode("facecheck") != null ? GetModeOnline("facecheck") : 0);
+            Text(c, R, "● " + T(id, "InGame", online), 12, CX + CW - 240, CY + 14, 218, 18, TextAnchor.MiddleRight, MGreen, FontReg);
 
-            var list = ModesOf("aim");
-            float cw = (LW - 10) / 2f;
-            for (int i = 0; i < list.Count && i < 4; i++)
-                ModeCard(c, R, player, list[i], CX + (i % 2) * (cw + 10), CY + 144 + (i / 2) * 182, cw, 172, T(id, "AimFoot_" + list[i].Id));
+            // плашки режимов 4×2
+            float cw = (CW - 30) / 4f, ch = 150f, y0 = CY + 108;
+            for (int i = 0; i < AimCards.Length; i++)
+            {
+                var a = AimCards[i];
+                float x = CX + (i % 4) * (cw + 10), y = y0 + (i / 4) * (ch + 10);
+                Panel(c, R, x, y, cw, ch);
+                TileIcon(c, R, a[1], x + 14, y + 14);
+                Text(c, R, T(id, "AimM_" + a[0]), 16, x + 14, y + 60, cw - 28, 22, TextAnchor.MiddleLeft, MInk);
+                Text(c, R, T(id, "AimMD_" + a[0]), 11, x + 14, y + 82, cw - 28, 18, TextAnchor.MiddleLeft, MMuted, FontReg);
+                Pill(c, R, T(id, "PlayBtn"), null, "hub.ui chat " + a[2], "primary", x + 14, y + ch - 42, cw - 28, 30, 12, true);
+            }
 
-            // статистика стрельбы с арен
-            Panel(c, R, RX, CY, RW, 300);
-            Text(c, R, T(id, "YourShooting"), 15, RX + 16, CY + 14, RW - 32, 20, TextAnchor.MiddleLeft, MInk);
+            // полоска статистики стрельбы
+            float sy = y0 + 2 * (ch + 10);
+            float sh = MH - 52 - 12 - sy;
+            Panel(c, R, CX, sy, CW, sh);
             var st = P("Arenas")?.Call("GetArenaStats", id) as Dictionary<string, int>;
             int shots = 0, hits = 0, kills = 0, deaths = 0, hs = 0, streak = 0;
             if (st != null) { st.TryGetValue("shots", out shots); st.TryGetValue("hits", out hits); st.TryGetValue("kills", out kills); st.TryGetValue("deaths", out deaths); st.TryGetValue("headshots", out hs); st.TryGetValue("beststreak", out streak); }
-            float acc = shots > 0 ? hits / (float)shots : 0f;
-            Text(c, R, shots > 0 ? Mathf.RoundToInt(acc * 100) + "%" : "—", 30, RX + 16, CY + 44, 120, 40, TextAnchor.MiddleLeft, MInk);
-            Text(c, R, T(id, "Accuracy"), 11, RX + 16, CY + 84, 160, 16, TextAnchor.MiddleLeft, MMuted, FontReg);
-            Text(c, R, T(id, "HitsOf", Num(hits), Num(shots)), 11, RX + 16, CY + 102, RW - 32, 16, TextAnchor.MiddleRight, MMuted, FontReg);
-            Bar(c, R, RX + 16, CY + 122, RW - 32, 5, acc, MWine);
-            string[][] rows =
+            string[][] cells =
             {
+                new[] { T(id, "Accuracy"), shots > 0 ? Mathf.RoundToInt(100f * hits / shots) + "%" : "—" },
                 new[] { T(id, "KD"), deaths > 0 ? (kills / (float)deaths).ToString("0.00", CultureInfo.InvariantCulture) : kills.ToString() },
                 new[] { T(id, "Headshots"), Num(hs) }, new[] { T(id, "BestStreak"), streak.ToString() },
             };
-            for (int i = 0; i < rows.Length; i++)
+            Text(c, R, T(id, "YourShooting"), 13, CX + 16, sy + 8, 300, 18, TextAnchor.MiddleLeft, MInk);
+            float qw = (CW - 32 - 30) / 4f;
+            for (int i = 0; i < cells.Length; i++)
             {
-                float y = CY + 140 + i * 36;
-                Box(c, R, MLine, RX + 16, y, RW - 32, 1, 0f);
-                Text(c, R, rows[i][0], 12, RX + 16, y + 2, RW - 32, 34, TextAnchor.MiddleLeft, MMuted, FontReg);
-                Text(c, R, rows[i][1], 14, RX + 16, y + 2, RW - 32, 34, TextAnchor.MiddleRight, MInk);
+                float x = CX + 16 + i * (qw + 10);
+                Text(c, R, cells[i][1], 20, x, sy + 28, qw, 26, TextAnchor.MiddleLeft, i == 0 ? MGold : MInk);
+                Text(c, R, cells[i][0], 11, x, sy + 54, qw, 16, TextAnchor.MiddleLeft, MMuted, FontReg);
             }
-            if (st == null) Text(c, R, T(id, "NoStats"), 11, RX + 16, CY + 250, RW - 32, 36, TextAnchor.UpperLeft, MMuted, FontReg);
-
-            Panel(c, R, RX, CY + 310, RW, 160);
-            Text(c, R, T(id, "AimCmds"), 15, RX + 16, CY + 324, RW - 32, 20, TextAnchor.MiddleLeft, MInk);
-            Pill(c, R, T(id, "AimMenuBtn"), "aim", "hub.ui chat aim", "ghost", RX + 16, CY + 356, RW - 32, 32);
-            Pill(c, R, T(id, "FcMenuBtn"), "eye", "hub.ui chat fc", "ghost", RX + 16, CY + 396, RW - 32, 32);
-            Text(c, R, T(id, "AimCmdsSub"), 11, RX + 16, CY + 434, RW - 32, 26, TextAnchor.MiddleLeft, MMuted, FontReg);
         }
 
         // ---------- Мини-игры
@@ -2874,6 +2884,15 @@ namespace Oxide.Plugins
             new[] { "AimCap", "Личная тренировка", "Personal training" },
             new[] { "AimTitle", "Чище прицел. Быстрее реакция.", "Cleaner aim. Faster reactions." },
             new[] { "AimSub", "Мишени, боты, зеркало и фейсчеки — с бесконечными патронами.", "Targets, bots, mirror and facechecks — with infinite ammo." },
+            new[] { "AimSub2", "Выбери режим — откроется аим-трен с ним. Патроны бесконечные.", "Pick a mode — aim train opens with it. Infinite ammo." },
+            new[] { "AimM_targets", "Мишени", "Targets" }, new[] { "AimMD_targets", "стоят на дистанции 10–250 м", "standing at 10–250 m" },
+            new[] { "AimM_strafers", "Стрейферы", "Strafers" }, new[] { "AimMD_strafers", "бегают и прыгают", "run and jump" },
+            new[] { "AimM_flow", "Aim Flow", "Aim Flow" }, new[] { "AimMD_flow", "всегда в движении, веди прицел", "always moving, track them" },
+            new[] { "AimM_shooters", "Стреляют в ответ", "Shoot back" }, new[] { "AimMD_shooters", "убей первым", "kill first" },
+            new[] { "AimM_mirror", "Бот-зеркало", "Mirror bot" }, new[] { "AimMD_mirror", "повторяет твои движения", "copies your moves" },
+            new[] { "AimM_bow", "Лук", "Bow" }, new[] { "AimMD_bow", "лук и арбалет, 10–70 м", "bow & crossbow, 10–70 m" },
+            new[] { "AimM_fcbot", "Фейсчек с ботом", "Facecheck vs bot" }, new[] { "AimMD_fcbot", "дверь по таймеру", "timed door" },
+            new[] { "AimM_facecheck", "Фейсчеки 1v1", "Facechecks 1v1" }, new[] { "AimMD_facecheck", "против игрока, до 7 побед", "vs a player, first to 7" },
             new[] { "AimFoot_aim", "мишени · Aim Flow · лук · зеркало", "targets · Aim Flow · bow · mirror" },
             new[] { "AimFoot_facecheck", "дверь по таймеру · игрок или бот", "timed door · player or bot" },
             new[] { "YourShooting", "Твоя стрельба", "Your shooting" },
