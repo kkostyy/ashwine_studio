@@ -5,7 +5,7 @@
 //              миникоптер), лут с трупов, команда Rust = своя группа, счёт убийств.
 //  ХЕЛИ-БОИ  — команды на атак-хели (пилот + стрелок), хели возрождаются на площадках,
 //              граница зоны и потолок высоты, до N убийств или по времени.
-//  BEDWARS   — 2–4 команды на островах: у каждой «кровать» (спальник), генераторы ресурсов,
+//  BEDWARS   — 2–8 команд на островах: у каждой «кровать» (спальник), генераторы ресурсов,
 //              магазин; пока кровать цела — возрождаешься, последняя команда побеждает.
 //  РЕЙД vs РЕЙД — фаза стройки (у каждой команды своя зона и ресурсы), затем фаза рейда:
 //              кто первым уничтожит шкаф противника; по времени — у кого больше уцелело.
@@ -31,7 +31,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Minigames", "Claude", "1.1.0")]
+    [Info("Minigames", "Claude", "1.2.0")]
     [Description("Роум, хели-бои, Bedwars и рейд против рейда")]
     public class Minigames : RustPlugin
     {
@@ -117,10 +117,11 @@ namespace Oxide.Plugins
         private const string FontReg = "robotocondensed-regular.ttf";
 
         private static readonly string[] Types = { "roam", "heli", "bedwars", "raidwars" };
-        private static readonly string[] TeamNames = { "Красные", "Синие", "Зелёные", "Жёлтые" };
-        private static readonly string[] TeamNamesEn = { "Red", "Blue", "Green", "Yellow" };
-        private static readonly string[] TeamCols = { "0.88 0.34 0.42 1", "0.44 0.71 1 1", "0.44 0.81 0.50 1", "0.91 0.77 0.42 1" };
-        private static readonly string[] TeamHex = { "#e0566b", "#6fb6ff", "#6fcf7f", "#e7c46a" };
+        private const int MaxTeams = 8;
+        private static readonly string[] TeamNames = { "Красные", "Синие", "Зелёные", "Жёлтые", "Фиолетовые", "Бирюзовые", "Оранжевые", "Белые" };
+        private static readonly string[] TeamNamesEn = { "Red", "Blue", "Green", "Yellow", "Purple", "Cyan", "Orange", "White" };
+        private static readonly string[] TeamCols = { "0.88 0.34 0.42 1", "0.44 0.71 1 1", "0.44 0.81 0.50 1", "0.91 0.77 0.42 1", "0.72 0.52 0.95 1", "0.36 0.85 0.85 1", "0.98 0.60 0.30 1", "0.92 0.92 0.92 1" };
+        private static readonly string[] TeamHex = { "#e0566b", "#6fb6ff", "#6fcf7f", "#e7c46a", "#b885f2", "#5cd9d9", "#fa994d", "#ebebeb" };
 
         private const string PrefabCar = "assets/content/vehicles/modularcar/2module_car_spawned.entity.prefab";
         private const string PrefabHorse = "assets/rust.ai/nextai/testridablehorse.prefab";
@@ -193,6 +194,9 @@ namespace Oxide.Plugins
             [JsonProperty("Bedwars: генератор острова даёт")] public KitEntry GenIslandItem = new KitEntry { Item = "wood", Amount = 10 };
             [JsonProperty("Bedwars: доп. генератор острова раз в (сек)")] public float GenIsland2 = 8f;
             [JsonProperty("Bedwars: доп. генератор острова даёт")] public KitEntry GenIslandItem2 = new KitEntry { Item = "metal.fragments", Amount = 5 };
+            [JsonProperty("Bedwars: каменный генератор острова раз в (сек, 0 = выкл)")] public float GenIslandStone = 4f;
+            [JsonProperty("Bedwars: каменный генератор даёт")] public KitEntry GenIslandStoneItem = new KitEntry { Item = "stones", Amount = 10 };
+            [JsonProperty("Bedwars: игроков в команде (1–4, 0 = поровну)")] public int BedwarsTeamSize = 0;
             [JsonProperty("Bedwars: центральный генератор раз в (сек)")] public float GenCenter = 20f;
             [JsonProperty("Bedwars: центральный генератор даёт")] public KitEntry GenCenterItem = new KitEntry { Item = "scrap", Amount = 3 };
             [JsonProperty("Bedwars: стартовый набор")] public List<KitEntry> BwKit = new List<KitEntry>
@@ -315,7 +319,7 @@ namespace Oxide.Plugins
             if (_data == null) _data = new StoredData();
             if (_data.Maps == null) _data.Maps = new Dictionary<string, GameMap>();
             if (_data.Wins == null) _data.Wins = new Dictionary<ulong, Dictionary<string, int>>();
-            foreach (var m in _data.Maps.Values) while (m.Spawns.Count < 4) m.Spawns.Add(new List<Pt>());
+            foreach (var m in _data.Maps.Values) while (m.Spawns.Count < MaxTeams) m.Spawns.Add(new List<Pt>());
         }
 
         private void SaveData() => Interface.Oxide.DataFileSystem.WriteObject("Minigames", _data);
@@ -331,13 +335,14 @@ namespace Oxide.Plugins
             public string State = "queue";    // queue | countdown | build | live | ended   (роум — всегда live)
             public List<ulong> Players = new List<ulong>();
             public Dictionary<ulong, int> Team = new Dictionary<ulong, int>();
-            public int[] Score = new int[4];
+            public int[] Score = new int[MaxTeams];
             public Dictionary<ulong, int> Kills = new Dictionary<ulong, int>();
             public float StateUntil;
             public List<BaseEntity> Spawned = new List<BaseEntity>();   // хели, кровати, транспорт, шкафы
             public HashSet<BaseNetworkable> Built = new HashSet<BaseNetworkable>();
-            public BaseEntity[] Beds = new BaseEntity[4];
-            public bool[] BedAlive = { true, true, true, true };
+            public BaseEntity[] Beds = new BaseEntity[MaxTeams];
+            public bool[] BedAlive = { true, true, true, true, true, true, true, true };
+            public float NextGenS;
             public HashSet<int> Eliminated = new HashSet<int>();
             public Dictionary<int, BaseEntity> Helis = new Dictionary<int, BaseEntity>();      // площадка → хели
             public Dictionary<int, float> HeliRespawnAt = new Dictionary<int, float>();
@@ -528,16 +533,32 @@ namespace Oxide.Plugins
 
         #region Старт и ход матчей
 
+        // ключ пати: игроки одной команды Rust попадают в одну команду мини-игры
+        private static ulong PartyKey(ulong id)
+        {
+            var p = BasePlayer.FindByID(id);
+            return p != null && p.currentTeam != 0UL ? p.currentTeam : id;
+        }
+
         private void StartGame(Game g)
         {
-            int teams = g.Type == "bedwars" ? Mathf.Clamp(g.Map.Teams, 2, 4) : 2;
-            var order = g.Players.OrderBy(x => UnityEngine.Random.Range(0, 100000)).ToList();
-            // команды Rust (пати) стараемся держать вместе
-            int ti = 0;
-            foreach (var id in order) { g.Team[id] = ti % teams; ti++; }
-            for (int t = 0; t < 4; t++) { g.Score[t] = 0; g.BedAlive[t] = t < teams; }
+            int teams = g.Type == "bedwars" ? Mathf.Clamp(g.Map.Teams, 2, MaxTeams) : 2;
+            // команды Rust (пати) держим вместе: сначала группы целиком, потом одиночки — в самую маленькую команду
+            int cap = g.Type == "bedwars" && _config.BedwarsTeamSize > 0 ? _config.BedwarsTeamSize : Mathf.CeilToInt(g.Players.Count / (float)teams);
+            var groups = g.Players.GroupBy(PartyKey).Select(x => x.ToList()).OrderByDescending(x => x.Count).ThenBy(x => UnityEngine.Random.Range(0, 100000)).ToList();
+            var size = new int[MaxTeams];
+            foreach (var grp in groups)
+                foreach (var id in grp)
+                {
+                    int best = -1;
+                    // своя пати — туда же, если есть место
+                    foreach (var mate in grp) { int mt; if (g.Team.TryGetValue(mate, out mt) && size[mt] < cap) { best = mt; break; } }
+                    if (best < 0) best = Enumerable.Range(0, teams).OrderBy(t => size[t]).First();
+                    g.Team[id] = best; size[best]++;
+                }
+            for (int t = 0; t < MaxTeams; t++) { g.Score[t] = 0; g.BedAlive[t] = t < teams; }
             g.Eliminated.Clear();
-            for (int t = teams; t < 4; t++) g.Eliminated.Add(t);
+            for (int t = teams; t < MaxTeams; t++) g.Eliminated.Add(t);
 
             float now = Time.realtimeSinceStartup;
             switch (g.Type)
@@ -556,7 +577,7 @@ namespace Oxide.Plugins
                         if (bed is BaseCombatEntity) { ((BaseCombatEntity)bed).InitializeHealth(_config.BedHealth, _config.BedHealth); }
                         g.Beds[t] = bed;
                     }
-                    g.NextGen = now + _config.GenIsland; g.NextGen2 = now + _config.GenIsland2; g.NextGenC = now + _config.GenCenter;
+                    g.NextGen = now + _config.GenIsland; g.NextGen2 = now + _config.GenIsland2; g.NextGenC = now + _config.GenCenter; g.NextGenS = now + _config.GenIslandStone;
                     break;
                 case "raidwars":
                     g.State = "build";
@@ -586,7 +607,7 @@ namespace Oxide.Plugins
         private Pt SpawnPoint(Game g, ulong id)
         {
             int team = g.Team.ContainsKey(id) ? g.Team[id] : 0;
-            var list = g.Map.Spawns[Mathf.Clamp(team, 0, 3)];
+            var list = g.Map.Spawns[Mathf.Clamp(team, 0, g.Map.Spawns.Count - 1)];
             if (list.Count == 0) list = g.Map.Spawns[0];
             if (list.Count == 0) return null;
             if (g.Type != "roam") return list[UnityEngine.Random.Range(0, list.Count)];
@@ -786,11 +807,16 @@ namespace Oxide.Plugins
 
         private void Generators(Game g, float now)
         {
-            int teams = Mathf.Clamp(g.Map.Teams, 2, 4);
+            int teams = Mathf.Clamp(g.Map.Teams, 2, MaxTeams);
             if (now >= g.NextGen)
             {
                 g.NextGen = now + _config.GenIsland;
                 for (int t = 0; t < teams && t < g.Map.Gens.Count; t++) if (!g.Eliminated.Contains(t)) Drop(g.Map.Gens[t], _config.GenIslandItem);
+            }
+            if (_config.GenIslandStone > 0f && now >= g.NextGenS)
+            {
+                g.NextGenS = now + _config.GenIslandStone;
+                for (int t = 0; t < teams && t < g.Map.Gens.Count; t++) if (!g.Eliminated.Contains(t)) Drop(g.Map.Gens[t], _config.GenIslandStoneItem);
             }
             if (now >= g.NextGen2)
             {
@@ -870,7 +896,7 @@ namespace Oxide.Plugins
             var alive = g.Players.Select(id => g.Team[id]).Distinct().ToList();
             if (g.Type == "bedwars")
             {
-                var teamsLeft = Enumerable.Range(0, Mathf.Clamp(g.Map.Teams, 2, 4)).Where(t => !g.Eliminated.Contains(t) && (g.BedAlive[t] || g.Players.Any(id => g.Team[id] == t && !IsOut(g, id)))).ToList();
+                var teamsLeft = Enumerable.Range(0, Mathf.Clamp(g.Map.Teams, 2, MaxTeams)).Where(t => !g.Eliminated.Contains(t) && (g.BedAlive[t] || g.Players.Any(id => g.Team[id] == t && !IsOut(g, id)))).ToList();
                 if (teamsLeft.Count <= 1) EndGame(g, teamsLeft.Count == 1 ? teamsLeft[0] : -1, false);
                 return;
             }
@@ -1181,20 +1207,20 @@ namespace Oxide.Plugins
             var pt = Pt.From(pos, yaw);
             string key = a.Length > 1 ? a[1].ToLower() : null;
             GameMap m = key != null && _data.Maps.ContainsKey(key) ? _data.Maps[key] : null;
-            int n = a.Length > 2 ? Mathf.Clamp(ParseInt(a[2]), 0, 3) : 0;
+            int n = a.Length > 2 ? Mathf.Clamp(ParseInt(a[2]), 0, MaxTeams - 1) : 0;
             switch (a[0].ToLower())
             {
                 case "create":
                     if (key == null || a.Length < 3 || !Types.Contains(a[2])) { Reply(player, "/mgadmin create <id> <roam|heli|bedwars|raidwars> [радиус]"); return; }
                     _data.Maps[key] = new GameMap { Id = key, Name = key, Type = a[2], Center = pt, Radius = a.Length > 3 ? ParseF(a[3], 150f) : (a[2] == "roam" ? 400f : 150f) };
                     break;
-                case "spawn": if (m == null) return; m.Spawns[n].Add(pt); Reply(player, $"спавн команды {n}: {m.Spawns[n].Count}"); break;
+                case "spawn": if (m == null) return; while (m.Spawns.Count < MaxTeams) m.Spawns.Add(new List<Pt>()); m.Spawns[n].Add(pt); Reply(player, $"спавн команды {n}: {m.Spawns[n].Count}"); break;
                 case "bed": if (m == null) return; while (m.Beds.Count <= n) m.Beds.Add(pt); m.Beds[n] = pt; break;
                 case "gen": if (m == null) return; while (m.Gens.Count <= n) m.Gens.Add(pt); m.Gens[n] = pt; break;
                 case "centergen": if (m == null) return; m.CenterGens.Add(pt); break;
                 case "pad": if (m == null) return; m.Pads.Add(pt); Reply(player, $"площадок: {m.Pads.Count}"); break;
                 case "zone": if (m == null) return; while (m.Zones.Count <= n) m.Zones.Add(pt); m.Zones[n] = pt; if (a.Length > 3) m.ZoneRadius = ParseF(a[3], 35f); break;
-                case "teams": if (m == null) return; m.Teams = Mathf.Clamp(ParseInt(a[2]), 2, 4); break;
+                case "teams": if (m == null) return; m.Teams = Mathf.Clamp(ParseInt(a[2]), 2, MaxTeams); Reply(player, $"команд: {m.Teams} (2, 4 или 8 — по числу островов)"); break;
                 case "radius": if (m == null) return; m.Radius = ParseF(a[2], 150f); m.Center = pt; break;
                 case "clear": if (m == null) return; foreach (var l in m.Spawns) l.Clear(); m.Beds.Clear(); m.Gens.Clear(); m.CenterGens.Clear(); m.Pads.Clear(); m.Zones.Clear(); break;
                 case "delete": if (key != null) _data.Maps.Remove(key); break;
@@ -1479,19 +1505,23 @@ namespace Oxide.Plugins
                     g.State == "build" ? T(id, "BuildPhase", left / 60, left % 60) :
                     g.Type == "raidwars" ? T(id, "RaidPhaseHud", left / 60, left % 60) :
                     g.Type == "heli" ? T(id, "HeliHud", _config.HeliKills, left / 60, left % 60) : T(id, "BwHud");
-                int teams = g.Type == "bedwars" ? Mathf.Clamp(g.Map.Teams, 2, 4) : 2;
+                int teams = g.Type == "bedwars" ? Mathf.Clamp(g.Map.Teams, 2, MaxTeams) : 2;
                 float w = 380f;
-                Root(c, UiHud, "Hud", ColHud, "0.5 1", "0.5 1", $"{-w / 2f} -{(g.Type == "bedwars" ? 104 : 82)}", $"{w / 2f} -14", 14f, false);
+                int rowsN = g.Type == "bedwars" && teams > 4 ? 2 : 1;
+                Root(c, UiHud, "Hud", ColHud, "0.5 1", "0.5 1", $"{-w / 2f} -{(g.Type == "bedwars" ? 104 + (rowsN - 1) * 40 : 82)}", $"{w / 2f} -14", 14f, false);
                 Text(c, UiHud, $"{T(id, "Type_" + g.Type).ToUpper()} · {g.Map.Name}", 10, 0, 6, w, 16, TextAnchor.MiddleCenter, ColDim);
                 Text(c, UiHud, phase, 14, 0, 22, w, 22, TextAnchor.MiddleCenter, g.State == "build" ? ColGold : ColText);
                 if (g.Type == "bedwars")
                 {
-                    float tw = (w - 24f) / teams;
+                    int perRow = Mathf.CeilToInt(teams / (float)rowsN);
+                    float tw = (w - 24f) / perRow;
                     for (int t = 0; t < teams; t++)
                     {
                         int alive = g.Players.Count(x => g.Team[x] == t && !_out.Contains(x));
-                        Box(c, UiHud, t == myTeam ? "1 1 1 0.08" : "0 0 0 0", 12 + t * tw, 48, tw - 6, 36, 9f);
-                        Text(c, UiHud, $"<color={TeamHex[t]}>■</color> {(g.BedAlive[t] ? T(id, "BedOk") : T(id, "BedLost"))} · {alive}", 11, 12 + t * tw, 48, tw - 6, 36, TextAnchor.MiddleCenter, g.Eliminated.Contains(t) ? ColDim : ColText);
+                        float tx = 12 + (t % perRow) * tw, ty = 48 + (t / perRow) * 40;
+                        Box(c, UiHud, t == myTeam ? "1 1 1 0.08" : "0 0 0 0", tx, ty, tw - 6, 36, 9f);
+                        string bedTxt = teams > 4 ? (g.BedAlive[t] ? "●" : "×") : (g.BedAlive[t] ? T(id, "BedOk") : T(id, "BedLost"));
+                        Text(c, UiHud, $"<color={TeamHex[t]}>■</color> {bedTxt} · {alive}", 11, tx, ty, tw - 6, 36, TextAnchor.MiddleCenter, g.Eliminated.Contains(t) ? ColDim : ColText);
                     }
                 }
                 else if (g.State != "queue" && g.State != "countdown")

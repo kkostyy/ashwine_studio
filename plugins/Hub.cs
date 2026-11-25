@@ -25,6 +25,7 @@
 //      bool CanEarnFrom(ulong killer, ulong victim) — антифарм: тот же IP, AFK-жертва, одна и та же жертва
 //      bool SameIp(ulong a, ulong b) · bool IsAfk(ulong id, float seconds)
 //      void AchAdd(ulong, string stat, int) · void AchMax(ulong, string stat, int) · List<string> GetAchTitles(ulong)
+//      int GetPlayMinutes(ulong) — минуты на сервере (анти-смурф ранкеда)
 //      float GetHudScale(ulong) — 0.65 / 0.8 / 1.0, игрок выбирает в профиле или /hud s|m|l
 //  Хуки, которые вызывает Hub:
 //      object CanHubTransfer(BasePlayer, string from, string to)  → string = причина отказа
@@ -49,7 +50,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Hub", "Claude", "1.3.0")]
+    [Info("Hub", "Claude", "1.3.1")]
     [Description("Хаб-сервер: табличка, лобби, режимы, порталы, NPC, инвентарь на режим, монеты, профиль")]
     public class Hub : RustPlugin
     {
@@ -196,6 +197,10 @@ namespace Oxide.Plugins
                     Inventory = "empty", OpenChatCommand = "ranked" },
                 new ModeCfg { Id = "ranked_mix", Name = "Ранкед: разные ганы", NameEn = "Ranked: mixed", Desc = "случайная пушка и сет", DescEn = "random gun and kit",
                     Inventory = "empty", OpenChatCommand = "ranked" },
+                new ModeCfg { Id = "ranked_t2", Name = "Ранкед: тир 2", NameEn = "Ranked: Tier 2", Desc = "Томпсон, MP5, SAR · роадсайн", DescEn = "Thompson, MP5, SAR · roadsign",
+                    Inventory = "empty", OpenChatCommand = "ranked" },
+                new ModeCfg { Id = "ranked_prim", Name = "Ранкед: примитив", NameEn = "Ranked: Primitive", Desc = "луки, Eoka, револьвер", DescEn = "bows, Eoka, revolver",
+                    Inventory = "empty", OpenChatCommand = "ranked" },
                 new ModeCfg { Id = "ffa", Name = "FFA / TDM", NameEn = "FFA / TDM", Desc = "арена = пушка", DescEn = "arena = gun", Inventory = "empty", Kit = ffaKit, OpenChatCommand = "arena" },
                 new ModeCfg { Id = "duels", Name = "Дуэли и свои арены", NameEn = "Duels & custom", Desc = "с друзьями, пароль", DescEn = "with friends, password",
                     Inventory = "empty", OpenChatCommand = "arena" },
@@ -203,7 +208,7 @@ namespace Oxide.Plugins
                     Inventory = "empty", OpenChatCommand = "fc" },
                 new ModeCfg { Id = "aim", Name = "Аим-трен", NameEn = "Aim train", Desc = "мишени, боты, зеркало", DescEn = "targets, bots, mirror",
                     Inventory = "kit", Kit = aimKit, AllowPvp = false, OpenChatCommand = "aim" },
-                new ModeCfg { Id = "primitive", Name = "Примитив", NameEn = "Primitive", Desc = "копья, луки, спиргнан", DescEn = "spears, bows, speargun",
+                new ModeCfg { Id = "primitive", Name = "Примитив", NameEn = "Primitive", Desc = "луки, арбалет, Eoka, копья", DescEn = "bows, crossbow, Eoka, spears",
                     Inventory = "empty", Kit = primKit, OpenChatCommand = "arena" },
                 new ModeCfg { Id = "heli", Name = "Хели-бои", NameEn = "Heli battles", Desc = "атак-хели · пилот + стрелок", DescEn = "attack heli · pilot + gunner", Inventory = "empty", OpenChatCommand = "mg heli" },
                 new ModeCfg { Id = "roam", Name = "Роум", NameEn = "Roam", Desc = "открытая зона, транспорт", DescEn = "open zone, vehicles", Inventory = "empty", DropLoot = true, OpenChatCommand = "mg roam" },
@@ -1034,6 +1039,8 @@ namespace Oxide.Plugins
             if (instant) SendToLobbyNow(player, player.IsConnected); else StartTransfer(player, Lobby);
         }
 
+        [HookMethod("GetPlayMinutes")] public int GetPlayMinutes(ulong id) => D(id).Minutes.Values.Sum();
+
         [HookMethod("GetModeOnline")] public int GetModeOnline(string mode) => Real.Count(p => p.IsConnected && ModeOf(p) == mode);
 
         [HookMethod("GetPlayersInMode")] public List<BasePlayer> GetPlayersInMode(string mode) => Real.Where(p => p.IsConnected && ModeOf(p) == mode).ToList();
@@ -1590,13 +1597,13 @@ namespace Oxide.Plugins
         private static readonly Dictionary<string, string> ModePage = new Dictionary<string, string>
         {
             { "build", "build" }, { "film", "film" },
-            { "ffa", "arena" }, { "duels", "arena" }, { "ranked_ak", "arena" }, { "ranked_mix", "arena" }, { "primitive", "arena" },
+            { "ffa", "arena" }, { "duels", "arena" }, { "ranked_ak", "arena" }, { "ranked_mix", "arena" }, { "ranked_t2", "arena" }, { "ranked_prim", "arena" }, { "primitive", "arena" },
             { "aim", "aim" }, { "facecheck", "aim" },
         };
 
         private static readonly Dictionary<string, string> ModeIcon = new Dictionary<string, string>
         {
-            { "build", "build" }, { "film", "film" }, { "ffa", "arena" }, { "duels", "arena" }, { "ranked_ak", "cup" }, { "ranked_mix", "star" },
+            { "build", "build" }, { "film", "film" }, { "ffa", "arena" }, { "duels", "arena" }, { "ranked_ak", "cup" }, { "ranked_mix", "star" }, { "ranked_t2", "cup" }, { "ranked_prim", "flag" },
             { "primitive", "flag" }, { "aim", "aim" }, { "facecheck", "eye" }, { "roam", "map" }, { "heli", "mini" }, { "bedwars", "flag" }, { "raidwars", "build" },
         };
 
@@ -2109,12 +2116,13 @@ namespace Oxide.Plugins
 
             var list = ModesOf("arena").Where(m =>
                 tab == "all" || (tab == "ffa" && (m.Id == "ffa" || m.Id == "primitive")) || (tab == "ranked" && m.Id.StartsWith("ranked")) || (tab == "duels" && m.Id == "duels")).ToList();
-            float cw = (CW - 20) / 3f, ch = 182f;
+            int cols = list.Count > 6 || (tab == "ranked" && list.Count > 3) ? 4 : 3;
+            float cw = (CW - 10 * (cols - 1)) / cols, ch = 182f;
             int maxRows = Mathf.Max(1, Mathf.FloorToInt((MH - 52 - y + 10) / (ch + 10)));
-            for (int i = 0; i < list.Count && i < 3 * maxRows; i++)
+            for (int i = 0; i < list.Count && i < cols * maxRows; i++)
             {
                 var m = list[i];
-                ModeCard(c, R, player, m, CX + (i % 3) * (cw + 10), y + (i / 3) * (ch + 10), cw, ch,
+                ModeCard(c, R, player, m, CX + (i % cols) * (cw + 10), y + (i / cols) * (ch + 10), cw, ch,
                     m.Id.StartsWith("ranked") ? T(id, "RankedFoot") : T(id, "ArenaFoot"));
             }
             if (list.Count == 0) Empty(c, R, T(id, "NoModes"), CX, y, CW, 120);
@@ -2881,6 +2889,8 @@ namespace Oxide.Plugins
             new[] { "Rules_duels", "1 на 1 или своя комната с паролем", "1v1 or your own room with a password" },
             new[] { "Rules_ranked_ak", "Рейтинговые матчи с АК, от 1v1 до 5v5", "Ranked AK matches, 1v1 to 5v5" },
             new[] { "Rules_ranked_mix", "Случайное оружие и набор каждый раунд", "Random gun and kit every round" },
+            new[] { "Rules_ranked_t2", "Томпсон, MP5 или SAR и дорожная броня", "Thompson, MP5 or SAR with roadsign armor" },
+            new[] { "Rules_ranked_prim", "Луки, арбалет, Eoka и револьвер", "Bows, crossbow, Eoka and revolver" },
             new[] { "Rules_primitive", "Копья, луки и арбалеты", "Spears, bows and crossbows" },
             new[] { "Rules_aim", "Тренировка без урона по игрокам", "Practice with no player damage" },
             new[] { "Rules_facecheck", "Дверь открывается — кто быстрее", "The door opens — who is faster" },

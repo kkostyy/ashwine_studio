@@ -27,7 +27,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Arenas", "Claude", "1.1.0")]
+    [Info("Arenas", "Claude", "1.2.0")]
     [Description("FFA, TDM, ган-гейм, дуэли и свои арены с экраном смерти, киллфидом и статистикой")]
     public class Arenas : RustPlugin
     {
@@ -150,7 +150,12 @@ namespace Oxide.Plugins
 
         private class Configuration
         {
-            [JsonProperty("Возрождение после смерти (сек)")] public float RespawnDelay = 2.5f;
+            [JsonProperty("Версия конфига")] public int ConfigVersion = 2;
+            [JsonProperty("Возрождение после смерти (сек)")] public float RespawnDelay = 1.5f;
+            [JsonProperty("За убийство: восстановить здоровье (FFA, TDM, ган-гейм)")] public bool KillHeal = true;
+            [JsonProperty("За убийство: сколько ХП (0 = полностью)")] public float KillHealAmount = 0f;
+            [JsonProperty("За убийство: пополнить патроны и магазин")] public bool KillRefill = true;
+            [JsonProperty("Большие арены: баррикад в наборе FFA/TDM")] public int LargeBarricades = 2;
             [JsonProperty("Без «ранен» на аренах (сразу смерть)")] public bool NoWounded = true;
             [JsonProperty("TDM: убийств до победы")] public int TdmKills = 30;
             [JsonProperty("Ган-гейм: длина лестницы (0 = все пушки)")] public int GunGameLength = 9;
@@ -194,8 +199,12 @@ namespace Oxide.Plugins
                 L("bolt", "Болт + 16x", "без брони", new KitEntry[] { W("hoodie"), W("pants"), W("shoes.boots") }, new[] { B("rifle.bolt", 1, "weapon.mod.8x.scope"), B("pistol.python"), Mn("ammo.rifle", 128), Mn("ammo.pistol", 64) }),
                 L("thompson", "Томпсон", "МВК-сет", hqm, new[] { B("smg.thompson", 1, "weapon.mod.holosight"), Mn("ammo.pistol", 256) }),
                 L("python", "Питон", "роадсайн", roadsign, new[] { B("pistol.python", 1, "weapon.mod.holosight"), Mn("ammo.pistol", 128) }),
-                L("primitive", "Примитив", "копьё, лук, арбалет", new KitEntry[] { W("burlap.shirt"), W("burlap.trousers"), W("burlap.shoes") },
-                    new[] { B("spear.wooden"), B("bow.hunting"), B("crossbow"), Mn("arrow.wooden", 64) }),
+                L("primitive", "Примитив", "копьё, лук, арбалет, Eoka, револьвер", new KitEntry[] { W("burlap.shirt"), W("burlap.trousers"), W("burlap.shoes") },
+                    new[] { B("spear.wooden"), B("bow.hunting"), B("crossbow"), B("pistol.eoka"), B("pistol.revolver"), Mn("arrow.wooden", 64), Mn("ammo.handmade.shell", 32), Mn("ammo.pistol", 64) }),
+                L("tier2", "Тир 2: Томпсон / MP5 / SAR", "роадсайн · 2 шприца · 3 бинта", roadsign,
+                    new[] { B("smg.thompson", 1, "weapon.mod.holosight"), B("smg.mp5"), B("rifle.semiauto"), Mn("ammo.pistol", 256), Mn("ammo.rifle", 128) }),
+                L("tier3", "Тир 3: AK / LR / M249", "МВК-сет · 2 шприца · 3 бинта", hqm,
+                    new[] { B("rifle.ak", 1, "weapon.mod.holosight"), B("rifle.lr300"), B("lmg.m249"), Mn("ammo.rifle", 400) }),
             };
         }
 
@@ -234,6 +243,17 @@ namespace Oxide.Plugins
                 if (_config == null) throw new Exception();
                 if (_config.Loadouts == null || _config.Loadouts.Count == 0) _config.Loadouts = DefaultLoadouts();
                 if (_config.GunGame == null || _config.GunGame.Count == 0) _config.GunGame = DefaultGunGame();
+                if (_config.ConfigVersion < 2)
+                {
+                    // 1.2: примитив с Eoka и револьвером, наборы по тирам, возрождение быстрее
+                    var defs = DefaultLoadouts();
+                    var prim = _config.Loadouts.FindIndex(l => l.Id == "primitive");
+                    if (prim >= 0) _config.Loadouts[prim] = defs.First(l => l.Id == "primitive");
+                    foreach (var l in defs) if (!_config.Loadouts.Any(x => x.Id == l.Id)) _config.Loadouts.Add(l);
+                    if (Mathf.Approximately(_config.RespawnDelay, 2.5f)) _config.RespawnDelay = 1.5f;
+                    _config.ConfigVersion = 2;
+                    PrintWarning("Конфиг обновлён до 1.2: примитив с Eoka и револьвером, наборы «Тир 2» и «Тир 3», возрождение 1.5 с");
+                }
             }
             catch
             {
@@ -270,6 +290,7 @@ namespace Oxide.Plugins
             public float Radius = 60f;
             public bool Template;
             public bool Barricades;
+            public string Size = "small";            // small — тесная арена, large — открытая местность с баррикадами
             public bool Enabled = true;
             public Pt Center;
             public List<Pt> Spawns = new List<Pt>();
@@ -649,6 +670,8 @@ namespace Oxide.Plugins
             if (s.Loadout != null) foreach (var k in s.Loadout.Items) GiveEntry(player, k);
             if (s.Kind == "match" && s.AllowBarricades)
                 GiveEntry(player, new KitEntry { Item = "barricade.wood.cover", Amount = 2, Container = "belt" });
+            else if (s.Kind != "match" && s.Arena != null && s.Arena.Size == "large" && _config.LargeBarricades > 0)
+                GiveEntry(player, new KitEntry { Item = "barricade.wood.cover", Amount = _config.LargeBarricades, Container = "belt" });
         }
 
         private static void GiveEntry(BasePlayer player, KitEntry k)
@@ -779,6 +802,7 @@ namespace Oxide.Plugins
 
                 if (s.Kind == "tdm" && s.Team.ContainsKey(kid)) s.Score[s.Team[kid]]++;
                 if (s.Kind == "gungame") GunGameKill(s, killer);
+                else if (s.Kind != "match") KillReward(killer, s);
             }
             else AddFeed(s, $"<color=#a39896>×</color> {Esc(victim.displayName)}");
 
@@ -796,6 +820,39 @@ namespace Oxide.Plugins
         }
 
         private static void Inc(Dictionary<ulong, int> d, ulong k) { int v; d.TryGetValue(k, out v); d[k] = v + 1; }
+
+        // За убийство: здоровье и патроны (как на FFA-серверах: сразу снова в бой)
+        private void KillReward(BasePlayer killer, Session s)
+        {
+            if (killer == null || killer.IsDead()) return;
+            try
+            {
+                if (_config.KillHeal)
+                {
+                    float max = killer.MaxHealth();
+                    killer.health = _config.KillHealAmount > 0f ? Mathf.Min(max, killer.health + _config.KillHealAmount) : max;
+                    if (killer.metabolism != null) { killer.metabolism.bleeding.value = 0f; killer.metabolism.SendChanges(); }
+                    killer.SendNetworkUpdate();
+                }
+                if (!_config.KillRefill) return;
+                foreach (var it in killer.inventory.containerBelt.itemList)
+                {
+                    var proj = it.GetHeldEntity() as BaseProjectile;
+                    if (proj?.primaryMagazine == null) continue;
+                    proj.primaryMagazine.contents = proj.primaryMagazine.capacity;
+                    proj.SendNetworkUpdateImmediate();
+                }
+                if (s.Loadout == null) return;
+                foreach (var k in s.Loadout.Items.Where(x => x.Container == "main"))
+                {
+                    var def = ItemManager.FindItemDefinition(k.Item);
+                    if (def == null || def.category != ItemCategory.Ammunition) continue;
+                    int have = killer.inventory.GetAmount(def.itemid);
+                    if (have < k.Amount) GiveEntry(killer, new KitEntry { Item = k.Item, Amount = k.Amount - have });
+                }
+            }
+            catch (Exception ex) { PrintWarning("KillReward: " + ex.Message); }
+        }
 
         private static string Esc(string s) => (s ?? "").Replace("<", "‹").Replace(">", "›");
 
@@ -1354,6 +1411,7 @@ namespace Oxide.Plugins
                 case "hub": ar.HubMode = a.Length > 2 ? a[2] : "ffa"; break;
                 case "template": ar.Template = a.Length < 3 || a[2] == "on"; break;
                 case "barricades": ar.Barricades = a.Length < 3 || a[2] == "on"; break;
+                case "size": ar.Size = a.Length > 2 && a[2] == "large" ? "large" : "small"; if (ar.Size == "large") ar.Barricades = true; break;
                 case "enable": ar.Enabled = true; break;
                 case "disable": ar.Enabled = false; Session s0; if (_sessions.TryGetValue(ar.Id, out s0)) foreach (var pid in s0.Players.ToList()) { var p = BasePlayer.FindByID(pid); if (p != null) Leave(p, true); } break;
                 case "delete": _data.Arenas.Remove(ar.Id); SaveArenas(); Reply(player, T(id, "AdmDeleted")); return;
@@ -1685,7 +1743,7 @@ namespace Oxide.Plugins
                         Box(c, R, "0.48 0.07 0.14 0.45", M + G + 8, y + 8, 36, 36, 10f);
                         Text(c, R, aa.Name.Substring(0, 1).ToUpper(), 15, M + G + 8, y + 8, 36, 36, TextAnchor.MiddleCenter, ColRose);
                         Text(c, R, aa.Name, 14, M + G + 54, y + 6, rw - 320, 22);
-                        Text(c, R, aa.Kind == "gungame" ? T(id, "GgDesc", _config.GunGameLength) : $"{lo?.Name} · {lo?.Desc}", 11, M + G + 54, y + 28, rw - 320, 18, TextAnchor.MiddleLeft, ColDim, FontReg);
+                        Text(c, R, T(id, aa.Size == "large" ? "SizeLarge" : "SizeSmall") + " · " + (aa.Kind == "gungame" ? T(id, "GgDesc", _config.GunGameLength) : $"{lo?.Name} · {lo?.Desc}"), 11, M + G + 54, y + 28, rw - 320, 18, TextAnchor.MiddleLeft, ColDim, FontReg);
                         Text(c, R, $"{n} / {aa.Max}", 12, M + G + rw - 236, y + 8, 90, 18, TextAnchor.MiddleRight);
                         Box(c, R, "1 1 1 0.08", M + G + rw - 236, y + 32, 90, 4, 2f);
                         if (n > 0) Box(c, R, ColWine, M + G + rw - 236, y + 32, Mathf.Max(4f, 90f * n / Mathf.Max(1, aa.Max)), 4, 2f);
@@ -2343,9 +2401,11 @@ namespace Oxide.Plugins
                 "name <id> <название> · loadout <id> <набор> · max <id> <n> · radius <id> <м> · center <id>\n" +
                 "spawn <id> — спавн FFA/ган-гейм · spawna <id> / spawnb <id> — спавны команд (TDM, дуэли)\n" +
                 "clearspawns <id> · template <id> on|off · barricades <id> on|off · hub <id> <режим>\n" +
+                "size <id> small|large — тесная арена или открытая местность (на large в FFA/TDM выдаются баррикады)\n" +
                 "enable|disable|delete|show <id> · list · loadouts",
                 "<color=#f0a6b1>/arenaadmin</color> create <id> <ffa|tdm|gungame|match> · name · loadout · max · radius · center\n" +
-                "spawn · spawna · spawnb · clearspawns · template · barricades · hub · enable · disable · delete · show · list · loadouts" },
+                "spawn · spawna · spawnb · clearspawns · template · barricades · size small|large · hub · enable · disable · delete · show · list · loadouts" },
+            new[] { "SizeSmall", "тесная", "small" }, new[] { "SizeLarge", "большая · баррикады", "large · barricades" },
         };
 
         private void RegisterLang()

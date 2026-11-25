@@ -26,7 +26,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("AimTrain", "Claude", "1.1.0")]
+    [Info("AimTrain", "Claude", "1.2.0")]
     [Description("Аим-трен: мишени, стрейферы, стрелки, бот-зеркало; фейсчеки против игрока и бота")]
     public class AimTrain : RustPlugin
     {
@@ -97,6 +97,8 @@ namespace Oxide.Plugins
         private const string UiMain = "At.Main";
         private const string UiHud = "At.Hud";
         private const string UiRec = "At.Rec";
+        private const string UiSpray = "At.Spray";
+        private const string UiZones = "At.Zones";
         private const string UiCenter = "At.Center";
         private const string UiToast = "At.Toast";
 
@@ -164,7 +166,18 @@ namespace Oxide.Plugins
                 new WeaponOpt { Item = "weapon.mod.holosight", Name = "Голо" }, new WeaponOpt { Item = "weapon.mod.small.scope", Name = "8x" },
                 new WeaponOpt { Item = "weapon.mod.silencer", Name = "Глушитель" }, new WeaponOpt { Item = "weapon.mod.lasersight", Name = "Лазер" },
             };
-            [JsonProperty("Дистанции (м)")] public List<int> Distances = new List<int> { 10, 30, 60, 100 };
+            [JsonProperty("Версия конфига")] public int ConfigVersion = 2;
+            [JsonProperty("Дистанции (м)")] public List<int> Distances = new List<int> { 10, 50, 100, 150, 200, 250 };
+            [JsonProperty("Рисунок очереди: показывать после очереди от (выстрелов)")] public int SprayMinShots = 3;
+            [JsonProperty("Рисунок очереди: держать на экране (сек)")] public float SprayShow = 4f;
+            [JsonProperty("Броня ботов на выбор (id → одежда)")] public Dictionary<string, List<string>> ArmorSets = new Dictionary<string, List<string>>
+            {
+                ["none"] = new List<string> { "hoodie", "pants" },
+                ["wood"] = new List<string> { "wood.armor.helmet", "wood.armor.jacket", "wood.armor.pants", "hoodie", "pants" },
+                ["roadsign"] = new List<string> { "coffeecan.helmet", "roadsign.jacket", "roadsign.kilt", "hoodie", "pants" },
+                ["hqm"] = new List<string> { "metal.facemask", "metal.plate.torso", "roadsign.kilt", "hoodie", "pants" },
+                ["heavy"] = new List<string> { "heavy.plate.helmet", "heavy.plate.jacket", "heavy.plate.pants" },
+            };
             [JsonProperty("Максимум ботов")] public int MaxBots = 6;
             [JsonProperty("Ширина дорожки по умолчанию (м)")] public float LaneWidth = 14f;
             [JsonProperty("Новый бот после убийства через (сек)")] public float BotRespawn = 0.6f;
@@ -196,6 +209,14 @@ namespace Oxide.Plugins
             {
                 Config.Settings.ObjectCreationHandling = ObjectCreationHandling.Replace; _config = Config.ReadObject<Configuration>();
                 if (_config == null || _config.Diffs == null || _config.Diffs.Count == 0) throw new Exception();
+                if (_config.ConfigVersion < 2)
+                {
+                    // 1.2: дальние дистанции 150–250 м, броня ботов на выбор, рисунок очереди
+                    if (_config.Distances == null || _config.Distances.SequenceEqual(new List<int> { 10, 30, 60, 100 })) _config.Distances = new List<int> { 10, 50, 100, 150, 200, 250 };
+                    _config.ConfigVersion = 2;
+                    PrintWarning("Конфиг обновлён до 1.2: дистанции до 250 м, броня ботов на выбор");
+                }
+                if (_config.ArmorSets == null || _config.ArmorSets.Count == 0) _config.ArmorSets = new Configuration().ArmorSets;
             }
             catch
             {
@@ -302,6 +323,7 @@ namespace Oxide.Plugins
             public bool MirrorShoots;
             public string FcType = "door";
             public bool FcVsBot;
+            public string Armor = "auto";          // auto = как в сложности, иначе ключ из «Броня ботов на выбор»
         }
 
         private class AimSession
@@ -316,6 +338,15 @@ namespace Oxide.Plugins
             public double DistSum; public int DistN;
             public float Started;
             public int LastReact = -1;
+            // урон по зонам: 0 голова, 1 тело, 2 руки и ноги
+            public float[] ZoneDmg = new float[3];
+            public int[] ZoneHits = new int[3];
+            public float LastDmg; public int LastZone = -1;
+            // текущая очередь для рисунка
+            public int BurstShots;
+            public List<Vector2> BurstHits = new List<Vector2>();
+            public List<int> BurstZones = new List<int>();
+            public Timer BurstTimer;
         }
 
         private class FcGame
@@ -452,6 +483,9 @@ namespace Oxide.Plugins
             s.Bots.Clear();
             CuiHelper.DestroyUi(player, UiHud);
             CuiHelper.DestroyUi(player, UiRec);
+            CuiHelper.DestroyUi(player, UiSpray);
+            CuiHelper.DestroyUi(player, UiZones);
+            s.BurstTimer?.Destroy();
 
             // рекорды
             var st = St(id, player.displayName);
@@ -491,13 +525,19 @@ namespace Oxide.Plugins
         {
             float lateral;
             var anchor = AnchorFor(s, index, count, out lateral);
-            var bot = CreateBot(anchor + s.Lane.Stand.Right * lateral, s.D.Wear, s.P.Mode == "shooters" || s.P.Mode == "mirror" && s.P.MirrorShoots ? s.P.Weapon : null);
+            var bot = CreateBot(anchor + s.Lane.Stand.Right * lateral, BotWear(s), s.P.Mode == "shooters" || s.P.Mode == "mirror" && s.P.MirrorShoots ? s.P.Weapon : null);
             if (bot == null) return;
             s.Bots.Add(bot);
             _bots[bot] = new BotInfo { Aim = s, VisibleSince = Time.realtimeSinceStartup };
             var drv = bot.gameObject.AddComponent<BotDriver>();
             drv.Init(this, bot, s.Player, s.P.Mode, s.D, anchor, s.Lane.Stand.Right, Mathf.Max(4f, s.Lane.Width) / 2f, lateral);
             if (s.P.Mode == "mirror") drv.SetMirror(s.Lane.Stand.V, s.P.MirrorDelay / 1000f, s.P.MirrorShoots);
+        }
+
+        private List<string> BotWear(AimSession s)
+        {
+            List<string> w;
+            return s.P.Armor != "auto" && _config.ArmorSets.TryGetValue(s.P.Armor, out w) ? w : s.D.Wear;
         }
 
         private BasePlayer CreateBot(Vector3 pos, List<string> wear, string weapon)
@@ -740,7 +780,18 @@ namespace Oxide.Plugins
                     if (ms > 60 && ms < 5000) { s.Reacts.Add(ms); s.LastReact = ms; st.ReactSum += ms; st.ReactN++; }
                 }
                 if (hs) Center(attacker, $"HEADSHOT{(s.LastReact > 0 && bi.Hit ? " · " + s.LastReact + " " + T(Id(attacker), "Ms") : "")}", ColGold, 0.8f);
+                // зона попадания и урон (после брони — хук вызывается после ScaleDamage)
+                int zone = hs || (info.boneArea & HitArea.Head) != 0 ? 0 : (info.boneArea & (HitArea.Chest | HitArea.Stomach)) != 0 ? 1 : 2;
+                float dmg = info.damageTypes != null ? info.damageTypes.Total() : 0f;
+                s.ZoneDmg[zone] += dmg; s.ZoneHits[zone]++; s.LastDmg = dmg; s.LastZone = zone;
+                // точка на силуэте: вправо/влево от центра бота и высота от ног
+                var off = info.HitPositionWorld - bot.transform.position;
+                var right = bot.transform.right; right.y = 0f;
+                if (right.sqrMagnitude < 0.01f) right = Vector3.right;
+                s.BurstHits.Add(new Vector2(Vector3.Dot(off, right.normalized), off.y));
+                s.BurstZones.Add(zone);
                 DrawHud(s);
+                DrawZones(s);
             }
             else if (bi.Fc != null)
             {
@@ -759,6 +810,10 @@ namespace Oxide.Plugins
             {
                 s.Shots++;
                 St(Id(player)).Shots++;
+                s.BurstShots++;
+                s.BurstTimer?.Destroy();
+                var ss = s;
+                s.BurstTimer = timer.Once(0.6f, () => FinishBurst(ss));
                 // бесконечные патроны
                 if (projectile?.primaryMagazine != null)
                 {
@@ -1136,6 +1191,7 @@ namespace Oxide.Plugins
                         case "mode": p.Mode = a2; break;
                         case "diff": p.Diff = Mathf.Clamp(int.Parse(a2), 0, _config.Diffs.Count - 1); break;
                         case "dist": p.Dist = int.Parse(a2); break;
+                        case "armor": if (a2 == "auto" || _config.ArmorSets.ContainsKey(a2)) p.Armor = a2; break;
                         case "bots": p.Bots = Mathf.Clamp(p.Bots + int.Parse(a2), 1, _config.MaxBots); break;
                         case "weapon": p.Weapon = a2; break;
                         case "mod": if (!p.Mods.Remove(a2)) p.Mods.Add(a2); break;
@@ -1334,7 +1390,7 @@ namespace Oxide.Plugins
         {
             var id = Id(player);
             var p = Pf(id);
-            const float W = 960f, H = 640f;
+            const float W = 960f, H = 700f;
             var c = new CuiElementContainer();
             Window(c, UiMain, "A", T(id, "AimTitle"), T(id, "AimSub"), W, H, "aim.ui close");
             var R = UiMain;
@@ -1377,6 +1433,10 @@ namespace Oxide.Plugins
                 var dists = _config.Distances.Select(d => new[] { d.ToString(), d + " м", "aim.ui set dist " + d }).ToList();
                 dists.Add(new[] { "0", T(id, "Mix"), "aim.ui set dist 0" });
                 Seg(c, R, M + 14, y, iw, 32, dists, p.Dist.ToString()); y += 44;
+                Text(c, R, T(id, "BotArmor"), 10, M + 14, y, iw, 16, TextAnchor.MiddleLeft, ColDim); y += 22;
+                var armors = new List<string[]> { new[] { "auto", T(id, "ArmorAuto"), "aim.ui set armor auto" } };
+                foreach (var k in _config.ArmorSets.Keys.Take(5)) armors.Add(new[] { k, T(id, "Armor_" + k), "aim.ui set armor " + k });
+                Seg(c, R, M + 14, y, iw, 32, armors, p.Armor); y += 44;
                 Text(c, R, T(id, "BotsCount"), 10, M + 14, y, iw, 16, TextAnchor.MiddleLeft, ColDim); y += 22;
                 Btn(c, R, "−", "aim.ui set bots -1", ColBtn, 16, M + 14, y, 40, 32, ColText, 10f);
                 Box(c, R, ColRow, M + 60, y, 80, 32, 10f);
@@ -1505,6 +1565,70 @@ namespace Oxide.Plugins
             AddUiScaled(player, c);
         }
 
+        private static readonly string[] ZoneKeys = { "ZHead", "ZBody", "ZLimbs" };
+
+        // урон по зонам — справа сверху
+        private void DrawZones(AimSession s)
+        {
+            var player = s.Player;
+            if (player == null || !player.IsConnected) return;
+            var id = Id(player);
+            var c = new CuiElementContainer();
+            Root(c, UiZones, "Hud", ColHud, "1 1", "1 1", "-236 -150", "-16 -14", 16f, false);
+            Text(c, UiZones, T(id, "ZonesTitle").ToUpper(), 10, 14, 8, 192, 16, TextAnchor.MiddleLeft, ColDim);
+            Text(c, UiZones, T(id, "ZonesAvg"), 9, 14, 8, 192, 16, TextAnchor.MiddleRight, ColDim, FontReg);
+            for (int z = 0; z < 3; z++)
+            {
+                float y = 30 + z * 26;
+                int n = s.ZoneHits[z];
+                Text(c, UiZones, T(id, ZoneKeys[z]), 12, 14, y, 90, 22, TextAnchor.MiddleLeft, z == 0 ? ColGold : ColText, FontReg);
+                Text(c, UiZones, n.ToString(), 11, 104, y, 40, 22, TextAnchor.MiddleRight, ColDim, FontReg);
+                Text(c, UiZones, n > 0 ? (s.ZoneDmg[z] / n).ToString("0.0") : "—", 14, 144, y, 62, 22, TextAnchor.MiddleRight, z == 0 ? ColGold : ColText);
+            }
+            Box(c, UiZones, "1 1 1 0.08", 14, 110, 192, 1, 0f);
+            Text(c, UiZones, s.LastZone >= 0 ? T(id, "ZLast", s.LastDmg.ToString("0.0"), T(id, ZoneKeys[s.LastZone]).ToLower()) : "—", 11, 14, 112, 192, 20, TextAnchor.MiddleLeft, ColDim, FontReg);
+            CuiHelper.DestroyUi(player, UiZones);
+            AddUiScaled(player, c);
+        }
+
+        // рисунок очереди: силуэт бота и точки попаданий
+        private void FinishBurst(AimSession s)
+        {
+            if (s == null || s.Player == null || !s.Player.IsConnected || !_aim.ContainsKey(Id(s.Player))) return;
+            int shots = s.BurstShots;
+            var hits = s.BurstHits.ToList();
+            var zones = s.BurstZones.ToList();
+            s.BurstShots = 0; s.BurstHits.Clear(); s.BurstZones.Clear();
+            if (shots < _config.SprayMinShots) return;
+            var player = s.Player;
+            var id = Id(player);
+            var c = new CuiElementContainer();
+            const float W = 196f, H = 300f, SX = 98f, Foot = 262f, PxM = 120f;   // 1 м = 120 px
+            Root(c, UiSpray, "Hud", ColHud, "0 0.5", "0 0.5", $"16 {-H / 2f}", $"{16 + W} {H / 2f}", 16f, false);
+            Text(c, UiSpray, T(id, "SprayTitle").ToUpper(), 10, 14, 8, W - 28, 16, TextAnchor.MiddleLeft, ColDim);
+            Text(c, UiSpray, T(id, "SprayHits", hits.Count, shots), 12, 14, 24, W - 28, 18, TextAnchor.MiddleLeft, ColText);
+            // силуэт (рост ~1.8 м)
+            string sil = "1 1 1 0.07";
+            Box(c, UiSpray, sil, SX - 12, Foot - 1.80f * PxM, 24, 26, 12f);                // голова
+            Box(c, UiSpray, sil, SX - 26, Foot - 1.52f * PxM, 52, 0.62f * PxM, 10f);       // корпус
+            Box(c, UiSpray, sil, SX - 40, Foot - 1.48f * PxM, 12, 0.56f * PxM, 6f);        // руки
+            Box(c, UiSpray, sil, SX + 28, Foot - 1.48f * PxM, 12, 0.56f * PxM, 6f);
+            Box(c, UiSpray, sil, SX - 22, Foot - 0.88f * PxM, 20, 0.88f * PxM, 7f);        // ноги
+            Box(c, UiSpray, sil, SX + 2, Foot - 0.88f * PxM, 20, 0.88f * PxM, 7f);
+            for (int i = 0; i < hits.Count; i++)
+            {
+                float x = Mathf.Clamp(SX + hits[i].x * PxM, 8, W - 8), y = Mathf.Clamp(Foot - hits[i].y * PxM, 46, H - 10);
+                string col = zones[i] == 0 ? ColGold : zones[i] == 1 ? ColRose : "0.75 0.70 0.69 1";
+                float d = i == 0 ? 8f : 6f;
+                Box(c, UiSpray, col, x - d / 2f, y - d / 2f, d, d, d / 2f);
+            }
+            Text(c, UiSpray, T(id, "SprayFoot"), 9, 14, H - 22, W - 28, 14, TextAnchor.MiddleLeft, ColDim, FontReg);
+            CuiHelper.DestroyUi(player, UiSpray);
+            AddUiScaled(player, c);
+            var p = player;
+            timer.Once(_config.SprayShow, () => { if (p != null && p.IsConnected) CuiHelper.DestroyUi(p, UiSpray); });
+        }
+
         private void DrawFcHud(BasePlayer player, FcGame g)
         {
             var id = Id(player);
@@ -1622,6 +1746,14 @@ namespace Oxide.Plugins
 
         private static readonly string[][] Messages =
         {
+            new[] { "BotArmor", "БРОНЯ БОТОВ — ПРОВЕРКА УРОНА", "BOT ARMOR — DAMAGE TEST" }, new[] { "ArmorAuto", "авто", "auto" },
+            new[] { "Armor_none", "без брони", "none" }, new[] { "Armor_wood", "дерево", "wood" }, new[] { "Armor_roadsign", "роадсайн", "roadsign" },
+            new[] { "Armor_hqm", "МВК", "HQM" }, new[] { "Armor_heavy", "тяжёлая", "heavy" },
+            new[] { "ZonesTitle", "Урон по зонам", "Damage by zone" }, new[] { "ZonesAvg", "попад. · средний", "hits · avg" },
+            new[] { "ZHead", "Голова", "Head" }, new[] { "ZBody", "Тело", "Body" }, new[] { "ZLimbs", "Руки и ноги", "Limbs" },
+            new[] { "ZLast", "последний: {0} · {1}", "last: {0} · {1}" },
+            new[] { "SprayTitle", "Рисунок очереди", "Spray pattern" }, new[] { "SprayHits", "{0} из {1} попали", "{0} of {1} hit" },
+            new[] { "SprayFoot", "крупная точка — первый выстрел", "big dot — first shot" },
             new[] { "AimTitle", "АИМ-ТРЕН", "AIM TRAIN" }, new[] { "AimSub", "любое оружие · бесконечные патроны · /aim", "any weapon · infinite ammo · /aim" },
             new[] { "M_targets", "Мишени", "Targets" }, new[] { "MD_targets", "стоят на дистанциях", "standing at range" }, new[] { "MIcon_targets", "T", "T" },
             new[] { "M_strafers", "Стрейферы", "Strafers" }, new[] { "MD_strafers", "бегают и прыгают", "run and jump" }, new[] { "MIcon_strafers", "S", "S" },

@@ -1,8 +1,8 @@
 // =====================================================================================
 //  Ranked 1.0 — рейтинговые матчи для хаб-сервера Rust (Oxide / Carbon)
 // =====================================================================================
-//  Два ранкеда: «Калаши» (АК и одинаковый сет) и «Разные ганы» (каждый раунд у всех
-//  одна и та же случайная пушка и сет). Форматы 1v1, 2v2, 3v3, 5v5, матч до 5 побед.
+//  Четыре ранкеда: «Калаши» (АК и одинаковый сет), «Разные ганы» (каждый раунд у всех
+//  одна и та же случайная пушка и сет), «Тир 2» (Томпсон/MP5/SAR, роадсайн) и «Примитив». Форматы 1v1, 2v2, 3v3, 5v5, матч до 5 побед.
 //  Очередь соло или командой Rust (team), подбор по MMR с расширением окна,
 //  «Матч найден» с подтверждением (можно ждать, играя в другом режиме),
 //  60 секунд на перезаход при вылете, ранги Бронза → Легенда, таблица лидеров,
@@ -25,7 +25,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Ranked", "Claude", "1.1.0")]
+    [Info("Ranked", "Claude", "1.2.0")]
     [Description("Рейтинговые матчи 1v1–5v5: два ранкеда, MMR, ранги, сезоны, таблица лидеров")]
     public class Ranked : RustPlugin
     {
@@ -115,7 +115,7 @@ namespace Oxide.Plugins
         private const string FontReg = "robotocondensed-regular.ttf";
 
         private static readonly int[] Formats = { 1, 2, 3, 5 };
-        private static readonly string[] Ladders = { "ak", "mix" };
+        private static readonly string[] Ladders = { "ak", "mix", "t2", "prim" };
 
         #endregion
 
@@ -169,6 +169,16 @@ namespace Oxide.Plugins
             [JsonProperty("Сезон: команды наградам ({id} {place} {season} {ladder})")] public List<string> SeasonCommands = new List<string>();
             [JsonProperty("Режим Hub: калаши")] public string HubAk = "ranked_ak";
             [JsonProperty("Режим Hub: разные ганы")] public string HubMix = "ranked_mix";
+            [JsonProperty("Режим Hub: тир 2")] public string HubT2 = "ranked_t2";
+            [JsonProperty("Режим Hub: примитив")] public string HubPrim = "ranked_prim";
+
+            [JsonProperty("Анти-смурф: минимум часов на сервере для ранкеда (0 = нет)")] public float MinHours = 2f;
+            [JsonProperty("Анти-смурф: не сводить соперниками игроков с одного IP")] public bool BlockSameIp = true;
+            [JsonProperty("Анти-смурф: ключ Steam Web API (пусто = не проверять возраст аккаунта)")] public string SteamApiKey = "";
+            [JsonProperty("Анти-смурф: минимальный возраст Steam-аккаунта (дней)")] public int MinAccountDays = 30;
+            [JsonProperty("Анти-смурф: пускать закрытые профили Steam")] public bool AllowPrivateProfiles = true;
+            [JsonProperty("Ступени внутри ранга (III → II → I, 0 = без ступеней)")] public int Divisions = 3;
+            [JsonProperty("Наблюдать за тиммейтом после смерти")] public bool SpectateOnDeath = true;
             [JsonProperty("Скруглённые углы интерфейса")] public bool RoundedCorners = true;
 
             [JsonProperty("Ранги")] public List<RankDef> Ranks = new List<RankDef>
@@ -198,6 +208,25 @@ namespace Oxide.Plugins
                 new KitDef { Name = "Питон", Weapon = "pistol.python", Ammo = "ammo.pistol", AmmoAmount = 60, Weight = 6 },
                 new KitDef { Name = "Помпа", Weapon = "shotgun.pump", Ammo = "ammo.shotgun", AmmoAmount = 32, Weight = 5 },
             };
+            [JsonProperty("Тир 2: оружие (случайное каждый раунд)")] public List<KitDef> T2Guns = new List<KitDef>
+            {
+                new KitDef { Name = "Томпсон", Weapon = "smg.thompson", Mods = new List<string> { "weapon.mod.holosight" }, Ammo = "ammo.pistol", Weight = 10 },
+                new KitDef { Name = "MP5", Weapon = "smg.mp5", Ammo = "ammo.pistol", Weight = 10 },
+                new KitDef { Name = "SAR", Weapon = "rifle.semiauto", Ammo = "ammo.rifle", Weight = 10 },
+                new KitDef { Name = "Кастом СМГ", Weapon = "smg.2", Ammo = "ammo.pistol", Weight = 6 },
+                new KitDef { Name = "Питон", Weapon = "pistol.python", Ammo = "ammo.pistol", AmmoAmount = 60, Weight = 4 },
+            };
+            [JsonProperty("Тир 2: одежда")] public List<string> T2Wear = new List<string> { "coffeecan.helmet", "roadsign.jacket", "roadsign.kilt", "hoodie", "pants", "shoes.boots" };
+            [JsonProperty("Примитив: набор (выдаётся весь)")] public List<KitDef> PrimKit = new List<KitDef>
+            {
+                new KitDef { Name = "Лук", Weapon = "bow.hunting", Ammo = "arrow.wooden", AmmoAmount = 40 },
+                new KitDef { Name = "Арбалет", Weapon = "crossbow", Ammo = "arrow.wooden", AmmoAmount = 20 },
+                new KitDef { Name = "Eoka", Weapon = "pistol.eoka", Ammo = "ammo.handmade.shell", AmmoAmount = 24 },
+                new KitDef { Name = "Револьвер", Weapon = "pistol.revolver", Ammo = "ammo.pistol", AmmoAmount = 48 },
+                new KitDef { Name = "Копьё", Weapon = "spear.wooden" },
+            };
+            [JsonProperty("Примитив: одежда")] public List<string> PrimWear = new List<string> { "burlap.headwrap", "burlap.shirt", "burlap.trousers", "burlap.shoes" };
+
             [JsonProperty("Разные ганы: сеты")] public List<WearDef> MixWear = new List<WearDef>
             {
                 new WearDef { Name = "без брони", Wear = new List<string> { "hoodie", "pants", "shoes.boots" }, Weight = 6 },
@@ -326,6 +355,22 @@ namespace Oxide.Plugins
 
         private string RankName(RankDef r, ulong id) => IsEn(id) && !string.IsNullOrEmpty(r.NameEn) ? r.NameEn : r.Name;
 
+        // ступень внутри ранга: III (низ) → II → I (верх); у последнего ранга ступеней нет
+        private string Div(int mmr)
+        {
+            if (_config.Divisions <= 1) return "";
+            var rank = RankOf(mmr);
+            var next = NextRank(mmr);
+            if (next == null) return "";
+            int span = Mathf.Max(1, next.From - rank.From);
+            int step = Mathf.Clamp((mmr - rank.From) * _config.Divisions / span, 0, _config.Divisions - 1);
+            int div = _config.Divisions - step;
+            string[] roman = { "", "I", "II", "III", "IV", "V" };
+            return " " + (div < roman.Length ? roman[div] : div.ToString());
+        }
+
+        private string RankLabel(int mmr, ulong id) => RankName(RankOf(mmr), id) + Div(mmr);
+
         private bool IsEn(ulong id) => lang.GetLanguage(id.ToString()) != "ru";
 
         #endregion
@@ -357,6 +402,7 @@ namespace Oxide.Plugins
             public HashSet<ulong> Alive = new HashSet<ulong>();
             public KitDef Gun;
             public WearDef Wear;
+            public List<KitDef> Extras = new List<KitDef>();
             public Dictionary<ulong, int> Kills = new Dictionary<ulong, int>(), Deaths = new Dictionary<ulong, int>(), Hs = new Dictionary<ulong, int>();
             public Dictionary<ulong, float> Damage = new Dictionary<ulong, float>();
             public Dictionary<ulong, int> StartMmr = new Dictionary<ulong, int>();
@@ -372,6 +418,10 @@ namespace Oxide.Plugins
         private readonly List<Match> _matches = new List<Match>();
         private readonly Dictionary<ulong, Match> _in = new Dictionary<ulong, Match>();
         private readonly Dictionary<ulong, string> _ladderPick = new Dictionary<ulong, string>();
+        private readonly Dictionary<ulong, string> _topView = new Dictionary<ulong, string>();
+        private readonly HashSet<ulong> _spectating = new HashSet<ulong>();
+        private readonly Dictionary<ulong, int> _acctDays = new Dictionary<ulong, int>();      // возраст Steam-аккаунта; -1 = закрытый профиль
+        private readonly HashSet<ulong> _acctPending = new HashSet<ulong>();
         private readonly Dictionary<ulong, int> _formatPick = new Dictionary<ulong, int>();
         private readonly Dictionary<ulong, string> _topTab = new Dictionary<ulong, string>();
         private int _matchSeq;
@@ -380,7 +430,9 @@ namespace Oxide.Plugins
 
         private bool IsAdmin(BasePlayer p) => p != null && (p.IsAdmin || permission.UserHasPermission(p.UserIDString, PermAdmin));
 
-        private string HubModeFor(string ladder) => ladder == "mix" ? _config.HubMix : _config.HubAk;
+        private string HubModeFor(string ladder) => ladder == "mix" ? _config.HubMix : ladder == "t2" ? _config.HubT2 : ladder == "prim" ? _config.HubPrim : _config.HubAk;
+
+        private static string LadderShort(string l) => l == "ak" ? "AK" : l == "mix" ? "MIX" : l == "t2" ? "T2" : "PRIM";
 
         private Entry QueueOf(ulong id) => _queue.FirstOrDefault(e => e.Members.Contains(id));
 
@@ -434,6 +486,14 @@ namespace Oxide.Plugins
             {
                 if (_in.ContainsKey(m) || QueueOf(m) != null) { Toast(player, T(id, "PartyBusy"), true); return; }
             }
+            foreach (var m in party)
+            {
+                string why = SmurfCheck(m);
+                if (why == null) continue;
+                if (why == "wait") { Toast(player, T(id, "SmurfChecking"), false); return; }
+                Toast(player, why, true);
+                return;
+            }
             var e = new Entry { Members = party, Ladder = ladder, Format = format, Since = Time.realtimeSinceStartup };
             e.Avg = Mathf.RoundToInt((float)party.Average(m => R(m, ladder, format).Mmr));
             _queue.Add(e);
@@ -445,6 +505,52 @@ namespace Oxide.Plugins
             OpenQueue(player);
             TryMatch();
         }
+
+        // анти-смурф: часы на сервере и возраст Steam-аккаунта. null = можно, "wait" = ждём ответ Steam, иначе причина
+        private string SmurfCheck(ulong uid)
+        {
+            var name = D(uid).Name ?? uid.ToString();
+            if (_config.MinHours > 0f && Hub != null)
+            {
+                var o = Hub.Call("GetPlayMinutes", uid);
+                if (o is int && (int)o < _config.MinHours * 60f)
+                    return T(uid, "SmurfHours", name, _config.MinHours, ((int)o / 60f).ToString("0.#"));
+            }
+            if (string.IsNullOrEmpty(_config.SteamApiKey) || _config.MinAccountDays <= 0) return null;
+            int days;
+            if (_acctDays.TryGetValue(uid, out days))
+            {
+                if (days < 0) return _config.AllowPrivateProfiles ? null : T(uid, "SmurfPrivate", name);
+                return days < _config.MinAccountDays ? T(uid, "SmurfAge", name, _config.MinAccountDays) : null;
+            }
+            if (_acctPending.Add(uid))
+            {
+                string url = $"https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key={_config.SteamApiKey}&steamids={uid}";
+                webrequest.Enqueue(url, null, (code, body) =>
+                {
+                    _acctPending.Remove(uid);
+                    int d = -1;
+                    try
+                    {
+                        if (code == 200 && body != null)
+                        {
+                            int i = body.IndexOf("\"timecreated\":");
+                            if (i >= 0)
+                            {
+                                var num = new string(body.Substring(i + 14).TakeWhile(char.IsDigit).ToArray());
+                                long ts;
+                                if (long.TryParse(num, out ts)) d = (int)(DateTime.UtcNow - new DateTime(1970, 1, 1).AddSeconds(ts)).TotalDays;
+                            }
+                        }
+                    }
+                    catch { }
+                    _acctDays[uid] = d;
+                }, this, Oxide.Core.Libraries.RequestMethod.GET);
+            }
+            return "wait";
+        }
+
+        private bool SameIp(ulong a, ulong b) => _config.BlockSameIp && Hub != null && Hub.Call("SameIp", a, b) is bool && (bool)Hub.Call("SameIp", a, b);
 
         private void LeaveQueue(BasePlayer player, bool notify)
         {
@@ -483,7 +589,8 @@ namespace Oxide.Plugins
                         foreach (var e in cands)
                         {
                             int n = e.Members.Count;
-                            bool fitA = fill[0] + n <= format, fitB = fill[1] + n <= format;
+                            bool fitA = fill[0] + n <= format && !teams[1].Any(o => o.Members.Any(x => e.Members.Any(y => SameIp(x, y)))),
+                                 fitB = fill[1] + n <= format && !teams[0].Any(o => o.Members.Any(x => e.Members.Any(y => SameIp(x, y))));
                             if (!fitA && !fitB) continue;
                             int t = fitA && fitB ? (sum[0] <= sum[1] ? 0 : 1) : (fitA ? 0 : 1);
                             if (e == anchor) t = 0;
@@ -570,7 +677,10 @@ namespace Oxide.Plugins
             m.Round++;
             m.State = "countdown";
             m.Alive.Clear();
+            m.Extras.Clear();
             if (m.Ladder == "mix") { m.Gun = Pick(_config.MixGuns, k => k.Weight); m.Wear = Pick(_config.MixWear, w => w.Weight); }
+            else if (m.Ladder == "t2") { m.Gun = Pick(_config.T2Guns, k => k.Weight); m.Wear = new WearDef { Name = T(0, "RoadsignSet"), Wear = _config.T2Wear }; }
+            else if (m.Ladder == "prim") { m.Gun = _config.PrimKit[0]; m.Extras.AddRange(_config.PrimKit.Skip(1)); m.Wear = new WearDef { Name = "", Wear = _config.PrimWear }; }
             else { m.Gun = _config.AkKit; m.Wear = new WearDef { Name = "", Wear = _config.AkWear }; }
 
             foreach (var id in m.All.ToList())
@@ -601,7 +711,7 @@ namespace Oxide.Plugins
                     {
                         var p = BasePlayer.FindByID(id);
                         if (p == null) continue;
-                        if (left > 0) Center(p, (left == n && m.Ladder == "mix" ? $"<size=14>{T(id, "RoundN", m.Round)} · {T(id, "Dropped")}</size>\n<size=22>{m.Gun.Name}</size>\n<size=13>{T(id, "Set")}: {m.Wear.Name}</size>\n" : $"<size=14>{T(id, "RoundN", m.Round)}</size>\n") + left, ColText, 1.1f);
+                        if (left > 0) Center(p, (left == n && (m.Ladder == "mix" || m.Ladder == "t2") ? $"<size=14>{T(id, "RoundN", m.Round)} · {T(id, "Dropped")}</size>\n<size=22>{m.Gun.Name}</size>\n<size=13>{T(id, "Set")}: {m.Wear.Name}</size>\n" : $"<size=14>{T(id, "RoundN", m.Round)}</size>\n") + left, ColText, 1.1f);
                         else Center(p, T(id, "Fight"), ColGold, 0.9f);
                     }
                     if (left == 0) { m.State = "live"; RefreshAll(m); }
@@ -613,6 +723,7 @@ namespace Oxide.Plugins
         private void Place(BasePlayer p, Match m)
         {
             var id = Id(p);
+            StopSpec(p);
             int team = m.TeamOf(id);
             var list = team == 0 ? m.Arena.A : m.Arena.B;
             int idx = Mathf.Max(0, m.Teams[team].IndexOf(id));
@@ -640,6 +751,11 @@ namespace Oxide.Plugins
             if (_config.Syringes > 0) Give(p, "syringe.medical", _config.Syringes, null, p.inventory.containerBelt);
             if (_config.Bandages > 0) Give(p, "bandage", _config.Bandages, null, p.inventory.containerBelt);
             if (!string.IsNullOrEmpty(m.Gun.Ammo)) Give(p, m.Gun.Ammo, m.Gun.AmmoAmount, null, p.inventory.containerMain);
+            foreach (var x in m.Extras)
+            {
+                Give(p, x.Weapon, 1, x.Mods, p.inventory.containerBelt);
+                if (!string.IsNullOrEmpty(x.Ammo)) Give(p, x.Ammo, x.AmmoAmount, null, p.inventory.containerMain);
+            }
         }
 
         private static void Give(BasePlayer p, string shortname, int amount, List<string> mods, ItemContainer c)
@@ -734,6 +850,7 @@ namespace Oxide.Plugins
             {
                 _in.Remove(id);
                 var p = BasePlayer.FindByID(id);
+                StopSpec(p);
                 if (p == null || !p.IsConnected) continue;
                 CuiHelper.DestroyUi(p, UiHud); CuiHelper.DestroyUi(p, UiTeams); CuiHelper.DestroyUi(p, UiPause);
                 ShowResult(p, m, winner, deltas, forfeit);
@@ -880,6 +997,12 @@ namespace Oxide.Plugins
                 if (info.isHeadshot) { int h; m.Hs.TryGetValue(kid, out h); m.Hs[kid] = h + 1; }
             }
             CheckRoundEnd(m);
+            if (m.State == "live")
+                foreach (var sid in m.Teams[Mathf.Max(0, m.TeamOf(vid))].Where(x => _spectating.Contains(x)).ToList())
+                {
+                    var sp = BasePlayer.FindByID(sid);
+                    if (sp != null && !SpectateMate(sp, m)) StopSpec(sp);
+                }
             var pl = victim;
             timer.Once(1.5f, () => { if (pl != null && pl.IsConnected && pl.IsDead() && _in.ContainsKey(Id(pl))) pl.Respawn(); });
         }
@@ -899,8 +1022,40 @@ namespace Oxide.Plugins
             if (m == null || m.State == "accept") return null;
             Heal(player);
             player.inventory.Strip();
+            if (m.State == "live" && _config.SpectateOnDeath && SpectateMate(player, m)) return true;
             if (m.State == "live" || m.State == "between") Center(player, T(Id(player), "WaitRound"), ColDim, 2.5f);
             return true;   // набор выдаст следующий раунд
+        }
+
+        // ---------- наблюдение за живым тиммейтом до конца раунда
+        private static object PCall(object target, string method, params object[] args)
+        {
+            if (target == null) return null;
+            foreach (var mi in target.GetType().GetMethods(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic))
+            {
+                if (mi.Name != method || mi.GetParameters().Length != args.Length) continue;
+                try { return mi.Invoke(target, args) ?? true; } catch { return null; }
+            }
+            return null;
+        }
+
+        private bool SpectateMate(BasePlayer player, Match m)
+        {
+            var id = Id(player);
+            int t = m.TeamOf(id);
+            if (t < 0) return false;
+            var mate = m.Teams[t].Where(x => x != id && m.Alive.Contains(x)).Select(x => BasePlayer.FindByID(x)).FirstOrDefault(x => x != null && !x.IsDead());
+            if (mate == null) return false;
+            if (_spectating.Add(id)) PCall(player, "StartSpectating");
+            PCall(player, "UpdateSpectateTarget", mate.UserIDString);
+            Center(player, T(id, "Spectating", mate.displayName), ColDim, 2.5f);
+            return true;
+        }
+
+        private void StopSpec(BasePlayer player)
+        {
+            if (player == null || !_spectating.Remove(Id(player))) return;
+            PCall(player, "StopSpectating");
         }
 
         private object OnPlayerRespawn(BasePlayer player, BasePlayer.SpawnPoint sp) => Hub != null ? null : OnHubRespawn(player);
@@ -992,7 +1147,7 @@ namespace Oxide.Plugins
                         d.Seasons.Add(new SeasonResult { Season = season, Ladder = ladder, Format = format, Mmr = r.Mmr, Rank = RankOf(r.Mmr).Name, Place = i + 1 });
                         if (i < 3)
                         {
-                            string title = $"#{i + 1} S{season} {(ladder == "ak" ? "AK" : "MIX")} {format}v{format}";
+                            string title = $"#{i + 1} S{season} {LadderShort(ladder)} {format}v{format}";
                             d.Titles.Add(title);
                             if (Hub != null && i < _config.SeasonCoins.Count && !(Hub.Call("AddPrize", top[i].Key, _config.SeasonCoins[i], T(top[i].Key, "SeasonReward")) is bool)) Hub.Call("AddCoins", top[i].Key, _config.SeasonCoins[i], T(top[i].Key, "SeasonReward"));
                             foreach (var cmd in _config.SeasonCommands)
@@ -1050,6 +1205,7 @@ namespace Oxide.Plugins
                 case "accept": Accept(player); break;
                 case "decline": Decline(player); break;
                 case "top": _viewingQueue.Remove(id); if (!string.IsNullOrEmpty(a1)) _topTab[id] = a1; OpenTop(player); break;
+                case "topview": _topView[id] = a1 == "hall" ? "hall" : "ranks"; OpenTop(player); break;
                 case "queue": OpenQueue(player); break;
             }
         }
@@ -1240,29 +1396,29 @@ namespace Oxide.Plugins
             string ladder; if (!_ladderPick.TryGetValue(id, out ladder)) ladder = "ak";
             int format; if (!_formatPick.TryGetValue(id, out format)) format = 1;
             D(id, player.displayName);
-            const float W = 960f, H = 640f;
+            const float W = 960f, H = 700f;
             var c = new CuiElementContainer();
             Window(c, UiMain, "R", T(id, "Title"), T(id, "Sub", _data.Season, SeasonLeft(id), _config.RoundsToWin), W, H, "ranked.ui close");
             var R0 = UiMain;
             float top = M + 52 + 2 + M, cw = (W - 2 * M - G) / 2f;
 
-            // два ранкеда
-            for (int i = 0; i < 2; i++)
+            // четыре ранкеда: калаши, разные ганы, тир 2, примитив
+            for (int i = 0; i < Ladders.Length; i++)
             {
                 var l = Ladders[i];
-                float x = M + i * (cw + G);
+                float x = M + (i % 2) * (cw + G), y0 = top + (i / 2) * (72 + 8);
                 var r = R(id, l, format);
                 var rank = RankOf(r.Mmr);
                 bool a = l == ladder;
-                Box(c, R0, a ? ColWineSoft : ColPanel, x, top, cw, 92, 18f);
-                Badge(c, R0, rank, x + 16, top + 18, 56);
-                Text(c, R0, T(id, "L_" + l), 17, x + 84, top + 12, cw - 100, 24);
-                Text(c, R0, T(id, "LD_" + l), 11, x + 84, top + 36, cw - 100, 18, TextAnchor.MiddleLeft, ColDim, FontReg);
+                Box(c, R0, a ? ColWineSoft : ColPanel, x, y0, cw, 72, 16f);
+                Badge(c, R0, rank, x + 14, y0 + 14, 44);
+                Text(c, R0, T(id, "L_" + l), 15, x + 70, y0 + 8, cw - 86, 20);
+                Text(c, R0, T(id, "LD_" + l), 10, x + 70, y0 + 28, cw - 86, 16, TextAnchor.MiddleLeft, ColDim, FontReg);
                 int q = _queue.Where(e => e.Ladder == l && e.Format == format).Sum(e => e.Members.Count);
-                Text(c, R0, $"{RankName(rank, id)} · {r.Mmr} MMR   ·   {T(id, "InQueue", q)}", 11, x + 84, top + 58, cw - 100, 20, TextAnchor.MiddleLeft, rank.Color);
-                Btn(c, R0, "", "ranked.ui ladder " + l, "0 0 0 0", 10, x, top, cw, 92, ColText, 0f);
+                Text(c, R0, $"{RankLabel(r.Mmr, id)} · {r.Mmr} MMR   ·   {T(id, "InQueue", q)}", 10, x + 70, y0 + 46, cw - 86, 18, TextAnchor.MiddleLeft, rank.Color);
+                Btn(c, R0, "", "ranked.ui ladder " + l, "0 0 0 0", 10, x, y0, cw, 72, ColText, 0f);
             }
-            top += 92 + G;
+            top += 2 * 72 + 8 + G;
             Text(c, R0, T(id, "Format"), 10, M, top, 200, 16, TextAnchor.MiddleLeft, ColDim); top += 22;
             Seg(c, R0, M, top, W - 2 * M, 40, Formats.Select(f => new[] { f.ToString(), $"{f}v{f}", "ranked.ui format " + f }).ToList(), format.ToString(), 14);
             top += 40 + G;
@@ -1451,7 +1607,7 @@ namespace Oxide.Plugins
             int delta; deltas.TryGetValue(id, out delta);
             Box(c, R0, ColPanel, M, 104, W - 2 * M, 84, 16f);
             Badge(c, R0, rank, M + 14, 118, 56);
-            Text(c, R0, RankName(rank, id), 17, M + 84, 112, 260, 26, TextAnchor.MiddleLeft, rank.Color);
+            Text(c, R0, RankLabel(r.Mmr, id), 17, M + 84, 112, 260, 26, TextAnchor.MiddleLeft, rank.Color);
             Text(c, R0, (delta >= 0 ? "+" : "") + delta + " MMR", 22, W - M - 200, 112, 186, 26, TextAnchor.MiddleRight, delta >= 0 ? ColGreen : ColRed);
             float pct = next == null ? 1f : (r.Mmr - rank.From) / (float)Mathf.Max(1, next.From - rank.From);
             Bar(c, R0, M + 84, 144, W - 2 * M - 98, 8, pct, rank.Color);
@@ -1542,7 +1698,7 @@ namespace Oxide.Plugins
                 Text(c, R0, (i + 1).ToString(), 13, M + 20, y, 30, 34, TextAnchor.MiddleLeft, i == 0 ? ColGold : i < 3 ? ColText : ColDim);
                 Text(c, R0, show[i].Value.Name ?? "?", 13, M + 52, y, lw - 320, 34);
                 Badge(c, R0, rank, M + lw - 250, y + 6, 22);
-                Text(c, R0, RankName(rank, id), 12, M + lw - 222, y, 90, 34, TextAnchor.MiddleLeft, rank.Color);
+                Text(c, R0, RankLabel(r.Mmr, id), 12, M + lw - 222, y, 90, 34, TextAnchor.MiddleLeft, rank.Color);
                 Text(c, R0, r.Mmr.ToString(), 13, M + lw - 134, y, 56, 34, TextAnchor.MiddleCenter);
                 Text(c, R0, r.Matches > 0 ? Mathf.RoundToInt(100f * r.Wins / r.Matches) + "%" : "—", 13, M + lw - 74, y, 56, 34, TextAnchor.MiddleCenter);
                 y += 38;
@@ -1559,16 +1715,42 @@ namespace Oxide.Plugins
 
             float rx = M + lw + G;
             Box(c, R0, ColPanel, rx, top, rw, ph, 16f);
-            Text(c, R0, T(id, "Ranks"), 10, rx + 14, top + 10, rw - 28, 16, TextAnchor.MiddleLeft, ColDim);
-            for (int i = 0; i < _config.Ranks.Count; i++)
+            string view; if (!_topView.TryGetValue(id, out view)) view = "ranks";
+            float tw2 = (rw - 28 - 6) / 2f;
+            Btn(c, R0, T(id, "Ranks"), "ranked.ui topview ranks", view == "ranks" ? ColWine : ColBtn, 11, rx + 14, top + 10, tw2, 26, view == "ranks" ? ColText : ColDim, 9f);
+            Btn(c, R0, T(id, "HallOfFame"), "ranked.ui topview hall", view == "hall" ? ColWine : ColBtn, 11, rx + 14 + tw2 + 6, top + 10, tw2, 26, view == "hall" ? ColText : ColDim, 9f);
+            if (view == "hall")
+            {
+                // зал славы: топ-3 прошлых сезонов в выбранной лестнице и формате
+                var hall = _data.Players.SelectMany(kv => kv.Value.Seasons.Where(x => x.Ladder == ladder && x.Format == format && x.Place <= 3)
+                        .Select(x => new { x.Season, x.Place, x.Mmr, Name = kv.Value.Name ?? kv.Key.ToString() }))
+                    .GroupBy(x => x.Season).OrderByDescending(g2 => g2.Key).Take(4).ToList();
+                float hy = top + 46;
+                if (hall.Count == 0) Text(c, R0, T(id, "HallEmpty"), 12, rx + 14, top + 46, rw - 28, ph - 120, TextAnchor.MiddleCenter, ColDim, FontReg);
+                foreach (var g2 in hall)
+                {
+                    Text(c, R0, T(id, "SeasonN", g2.Key), 11, rx + 14, hy, rw - 28, 16, TextAnchor.MiddleLeft, ColGold);
+                    hy += 18;
+                    foreach (var x in g2.OrderBy(x => x.Place).Take(3))
+                    {
+                        Box(c, R0, ColRow, rx + 12, hy, rw - 24, 22, 7f);
+                        Text(c, R0, $"#{x.Place}", 11, rx + 20, hy, 30, 22, TextAnchor.MiddleLeft, x.Place == 1 ? ColGold : ColText);
+                        Text(c, R0, x.Name, 11, rx + 48, hy, rw - 130, 22, TextAnchor.MiddleLeft, ColText, FontReg);
+                        Text(c, R0, x.Mmr.ToString(), 11, rx + rw - 80, hy, 62, 22, TextAnchor.MiddleRight, ColDim);
+                        hy += 24;
+                    }
+                    hy += 6;
+                }
+            }
+            for (int i = 0; i < _config.Ranks.Count && view == "ranks"; i++)
             {
                 var rk = _config.Ranks[i];
-                float ry = top + 34 + i * 40;
+                float ry = top + 46 + i * 38;
                 Badge(c, R0, rk, rx + 14, ry, 30);
                 Text(c, R0, RankName(rk, id), 13, rx + 54, ry, rw - 140, 30, TextAnchor.MiddleLeft, rk.Color);
                 Text(c, R0, rk.From + "+", 12, rx + rw - 90, ry, 76, 30, TextAnchor.MiddleRight, ColDim);
             }
-            Text(c, R0, T(id, "SeasonRules", _config.SeasonDays), 10, rx + 14, top + ph - 60, rw - 28, 50, TextAnchor.LowerCenter, ColDim, FontReg);
+            if (view == "ranks") Text(c, R0, T(id, "SeasonRules", _config.SeasonDays) + (_config.Divisions > 1 ? " " + T(id, "DivRules") : ""), 10, rx + 14, top + ph - 60, rw - 28, 50, TextAnchor.LowerCenter, ColDim, FontReg);
 
             float by = H - M - 46, bw = (W - 2 * M - G) / 2f;
             Btn(c, R0, T(id, "FindMatch"), "ranked.ui queue", ColWine, 14, M, by, bw, 46, ColText, 14f);
@@ -1595,7 +1777,8 @@ namespace Oxide.Plugins
                 if (best.Value == null) continue;
                 var rank = RankOf(best.Value.Mmr);
                 string f = best.Key.Split('_')[1];
-                lines.Add($"{(l == "ak" ? (en ? "AK" : "Калаши") : (en ? "Mixed" : "Разные ганы"))} {f}v{f}: <color=#{ColorHex(rank.Color)}>{(en ? rank.NameEn : rank.Name)}</color> · {best.Value.Mmr} MMR · {best.Value.Wins}–{best.Value.Losses}");
+                string ln = lang.GetMessage("L_" + l, this, en ? null : userId.ToString());
+                lines.Add($"{ln} {f}v{f}: <color=#{ColorHex(rank.Color)}>{(en ? rank.NameEn : rank.Name)}{Div(best.Value.Mmr)}</color> · {best.Value.Mmr} MMR · {best.Value.Wins}–{best.Value.Losses}");
             }
             if (d.Titles.Count > 0) lines.Add((en ? "Titles: " : "Титулы: ") + string.Join(", ", d.Titles.Take(3).ToArray()));
             return string.Join("\n", lines.ToArray());
@@ -1615,7 +1798,7 @@ namespace Oxide.Plugins
             PData d;
             Rating r;
             if (!_data.Players.TryGetValue(id, out d) || !d.R.TryGetValue(Key(ladder, format), out r)) return null;
-            return RankOf(r.Mmr).Name;
+            return RankOf(r.Mmr).Name + Div(r.Mmr);
         }
 
         [HookMethod("GetBestRank")]
@@ -1624,7 +1807,7 @@ namespace Oxide.Plugins
             PData d;
             if (!_data.Players.TryGetValue(id, out d) || d.R.Count == 0) return null;
             var best = d.R.Values.Where(r => r.Matches > 0).OrderByDescending(r => r.Mmr).FirstOrDefault();
-            return best == null ? null : RankOf(best.Mmr).Name;
+            return best == null ? null : RankOf(best.Mmr).Name + Div(best.Mmr);
         }
 
         [HookMethod("GetBestMmr")]
@@ -1664,6 +1847,17 @@ namespace Oxide.Plugins
             new[] { "L_ak", "Калаши", "AK only" }, new[] { "L_mix", "Разные ганы", "Mixed guns" },
             new[] { "LD_ak", "АК + одинаковый сет у всех", "AK and the same kit for everyone" },
             new[] { "LD_mix", "каждый раунд случайная пушка и сет", "random gun and kit every round" },
+            new[] { "L_t2", "Тир 2", "Tier 2" }, new[] { "LD_t2", "Томпсон, MP5, SAR · дорожная броня", "Thompson, MP5, SAR · roadsign armor" },
+            new[] { "L_prim", "Примитив", "Primitive" }, new[] { "LD_prim", "луки, арбалет, Eoka, револьвер, копьё", "bows, crossbow, Eoka, revolver, spear" },
+            new[] { "RoadsignSet", "роадсайн", "roadsign" },
+            new[] { "HallOfFame", "ЗАЛ СЛАВЫ", "HALL OF FAME" }, new[] { "HallEmpty", "Сезоны ещё не завершались — первые чемпионы появятся здесь", "No finished seasons yet" },
+            new[] { "SeasonN", "СЕЗОН {0}", "SEASON {0}" },
+            new[] { "DivRules", "Внутри ранга три ступени: III → II → I.", "Each rank has three steps: III → II → I." },
+            new[] { "SmurfHours", "{0}: для ранкеда нужно {1} ч на сервере (сейчас {2} ч)", "{0}: ranked needs {1}h on the server (now {2}h)" },
+            new[] { "SmurfAge", "{0}: Steam-аккаунт младше {1} дней — ранкед недоступен", "{0}: Steam account younger than {1} days — no ranked" },
+            new[] { "SmurfPrivate", "{0}: профиль Steam закрыт — откройте его для ранкеда", "{0}: Steam profile is private — make it public for ranked" },
+            new[] { "SmurfChecking", "Проверяем аккаунт Steam… нажми «Найти матч» ещё раз через пару секунд", "Checking Steam account… press Find match again in a moment" },
+            new[] { "Spectating", "Наблюдаешь за {0} · вернёшься в следующем раунде", "Spectating {0} · back next round" },
             new[] { "InQueue", "{0} в очереди", "{0} in queue" }, new[] { "Format", "ФОРМАТ", "FORMAT" },
             new[] { "Party", "ТВОЯ КОМАНДА · {0} / {1}", "YOUR PARTY · {0} / {1}" }, new[] { "You", " (ты)", " (you)" },
             new[] { "PartyHint", "Пати = твоя команда в Rust (меню Tab, вкладка «Команда»). В очередь ставит лидер, недостающих добирает поиск.", "Party = your Rust team. The leader queues; missing players are filled by matchmaking." },
