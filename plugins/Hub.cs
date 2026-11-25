@@ -50,7 +50,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Hub", "Claude", "1.4.1")]
+    [Info("Hub", "Claude", "1.4.2")]
     [Description("Хаб-сервер: табличка, лобби, режимы, порталы, NPC, инвентарь на режим, монеты, профиль")]
     public class Hub : RustPlugin
     {
@@ -2115,7 +2115,10 @@ namespace Oxide.Plugins
                 Text(c, R, rank ?? T(id, "NoRank"), 21, CX + 74, y + 12, 400, 26, TextAnchor.MiddleLeft, MInk);
                 Text(c, R, mmr is int && (int)mmr > 0 ? T(id, "RankMmr", Num((int)mmr)) : T(id, "RankHint"), 12, CX + 74, y + 38, 500, 18, TextAnchor.MiddleLeft, MMuted, FontReg);
                 Pill(c, R, T(id, "Leaderboard"), "cup", "hub.ui chat top", "ghost", CX + CW - 196, y + 19, 180, 32);
-                y += 82;
+                y += 80;
+                // каждый ММ — плашка на всю ширину
+                for (int i = 0; i < MmLadders.Length; i++) LadderStrip(c, R, player, MmLadders[i], CX, y + i * 66, CW, 58);
+                return;
             }
             Text(c, R, T(id, "ArenaHint"), 12, CX, y, CW - 380, 34, TextAnchor.MiddleLeft, MMuted, FontReg);
             Pill(c, R, T(id, "DuelBtn"), "arena", "hub.ui chat duel", "ghost", CX + CW - 370, y, 180, 34);
@@ -2136,6 +2139,43 @@ namespace Oxide.Plugins
             if (list.Count == 0) Empty(c, R, T(id, "NoModes"), CX, y, CW, 120);
         }
 
+        // ---------- плашка матчмейкинга: на всю ширину, свой стиль (винная полоса слева, ранг, поиск, кнопка)
+        private static readonly string[][] MmLadders =
+        {
+            new[] { "ak", "cup", "ranked ak" }, new[] { "mix", "star", "ranked mix" }, new[] { "t2", "cup", "ranked t2" },
+            new[] { "prim", "flag", "ranked prim" }, new[] { "bow", "flag", "ranked bow" }, new[] { "heli", "mini", "mg helimm" },
+        };
+
+        private void MmStrip(CuiElementContainer c, string R, BasePlayer player, string key, string icon, string cmd, float x, float y, float w, float h,
+            string rank, string rankColor, int mmr, int queue, string tag)
+        {
+            var id = Id(player);
+            // корпус: тёмно-винный, тонкая розовая рамка, яркая полоса слева и мягкое свечение справа
+            BBox(c, R, "0.11 0.06 0.07 1", "0.941 0.651 0.694 0.22", x, y, w, h, 14f);
+            Box(c, R, "0.639 0.086 0.184 0.16", x + w - 284, y + 1, 283, h - 2, 13f);
+            Box(c, R, MWine, x, y + 8, 4, h - 16, 2f);
+            TileIcon(c, R, icon, x + 16, y + (h - 40) / 2f);
+            Text(c, R, tag.ToUpper(), 9, x + 68, y + 8, 300, 12, TextAnchor.MiddleLeft, MPink);
+            Text(c, R, T(id, "Mm_" + key), 16, x + 68, y + 19, w - 520, 20, TextAnchor.MiddleLeft, MInk);
+            Text(c, R, T(id, "MmD_" + key), 11, x + 68, y + 39, w - 520, 16, TextAnchor.MiddleLeft, MMuted, FontReg);
+            // ранг и MMR
+            float rx = x + w - 440;
+            if (mmr >= 0) Text(c, R, rank ?? T(id, "NoRank"), 14, rx, y + 12, 150, 20, TextAnchor.MiddleLeft, rank != null && rankColor != null ? rankColor : MInk);
+            if (mmr >= 0) Text(c, R, mmr > 0 ? mmr + " MMR" : "—", 11, rx, y + 32, 150, 16, TextAnchor.MiddleLeft, MMuted, FontReg);
+            // поиск
+            Text(c, R, "● " + T(id, "MmQueue", queue), 11, x + w - 270, y, 104, h, TextAnchor.MiddleLeft, queue > 0 ? MGreen : MMuted, FontReg);
+            Pill(c, R, T(id, "MmFind"), null, "hub.ui chat " + cmd, "primary", x + w - 160, y + (h - 34) / 2f, 144, 34, 12, true);
+        }
+
+        private void LadderStrip(CuiElementContainer c, string R, BasePlayer player, string[] l, float x, float y, float w, float h)
+        {
+            var info = P("Ranked")?.Call("GetLadderCard", Id(player), l[0]) as Dictionary<string, object>;
+            int mmr = info != null && info["mmr"] is int ? (int)info["mmr"] : 0;
+            int queue = info != null && info["queue"] is int ? (int)info["queue"] : 0;
+            if (l[0] == "heli") { var q = P("Minigames")?.Call("HeliQueueCount"); if (q is int) queue = (int)q; }
+            MmStrip(c, R, player, l[0], l[1], l[2], x, y, w, h, info?["rank"] as string, info?["color"] as string, mmr, queue, T(Id(player), l[0] == "heli" ? "MmTagHeli" : "MmTagRanked"));
+        }
+
         private static void Empty(CuiElementContainer c, string R, string text, float x, float y, float w, float h)
         {
             BBox(c, R, "0.071 0.055 0.055 1", "1 1 1 0.1", x, y, w, h, 14f);
@@ -2148,7 +2188,7 @@ namespace Oxide.Plugins
         {
             new[] { "targets", "aim", "aim targets" }, new[] { "strafers", "group", "aim strafers" }, new[] { "flow", "star", "aim flow" },
             new[] { "shooters", "arena", "aim shooters" }, new[] { "mirror", "eye", "aim mirror" }, new[] { "bow", "flag", "aim bow" },
-            new[] { "fcbot", "lock", "aim fcbot" }, new[] { "facecheck", "group", "fc" },
+            new[] { "fcbot", "lock", "aim fcbot" },
         };
 
         private void PageAim(CuiElementContainer c, BasePlayer player)
@@ -2165,16 +2205,19 @@ namespace Oxide.Plugins
             int online = (aimMode != null ? GetModeOnline(aimMode.Id) : 0) + (Mode("facecheck") != null ? GetModeOnline("facecheck") : 0);
             Text(c, R, "● " + T(id, "InGame", online), 12, CX + CW - 240, CY + 14, 218, 18, TextAnchor.MiddleRight, MGreen, FontReg);
 
+            // фейсчеки 1v1 — матчмейкинг: плашка на всю ширину
+            int fcOn = Mode("facecheck") != null ? GetModeOnline("facecheck") : 0;
+            MmStrip(c, R, player, "facecheck", "group", "fc", CX, CY + 106, CW, 58, null, null, -1, fcOn, T(id, "MmTagFc"));
             // плашки режимов 4×2
-            float cw = (CW - 30) / 4f, ch = 150f, y0 = CY + 108;
+            float cw = (CW - 30) / 4f, ch = 128f, y0 = CY + 174;
             for (int i = 0; i < AimCards.Length; i++)
             {
                 var a = AimCards[i];
                 float x = CX + (i % 4) * (cw + 10), y = y0 + (i / 4) * (ch + 10);
                 Panel(c, R, x, y, cw, ch);
                 TileIcon(c, R, a[1], x + 14, y + 14);
-                Text(c, R, T(id, "AimM_" + a[0]), 16, x + 14, y + 60, cw - 28, 22, TextAnchor.MiddleLeft, MInk);
-                Text(c, R, T(id, "AimMD_" + a[0]), 11, x + 14, y + 82, cw - 28, 18, TextAnchor.MiddleLeft, MMuted, FontReg);
+                Text(c, R, T(id, "AimM_" + a[0]), 15, x + 64, y + 14, cw - 78, 22, TextAnchor.MiddleLeft, MInk);
+                Text(c, R, T(id, "AimMD_" + a[0]), 11, x + 14, y + 58, cw - 28, 18, TextAnchor.MiddleLeft, MMuted, FontReg);
                 Pill(c, R, T(id, "PlayBtn"), null, "hub.ui chat " + a[2], "primary", x + 14, y + ch - 42, cw - 28, 30, 12, true);
             }
 
@@ -2191,13 +2234,13 @@ namespace Oxide.Plugins
                 new[] { T(id, "KD"), deaths > 0 ? (kills / (float)deaths).ToString("0.00", CultureInfo.InvariantCulture) : kills.ToString() },
                 new[] { T(id, "Headshots"), Num(hs) }, new[] { T(id, "BestStreak"), streak.ToString() },
             };
-            Text(c, R, T(id, "YourShooting"), 13, CX + 16, sy + 8, 300, 18, TextAnchor.MiddleLeft, MInk);
+            Text(c, R, T(id, "YourShooting"), 12, CX + 16, sy + 6, 300, 16, TextAnchor.MiddleLeft, MInk);
             float qw = (CW - 32 - 30) / 4f;
             for (int i = 0; i < cells.Length; i++)
             {
                 float x = CX + 16 + i * (qw + 10);
-                Text(c, R, cells[i][1], 20, x, sy + 28, qw, 26, TextAnchor.MiddleLeft, i == 0 ? MGold : MInk);
-                Text(c, R, cells[i][0], 11, x, sy + 54, qw, 16, TextAnchor.MiddleLeft, MMuted, FontReg);
+                Text(c, R, cells[i][1], 18, x, sy + 22, qw, 22, TextAnchor.MiddleLeft, i == 0 ? MGold : MInk);
+                Text(c, R, cells[i][0], 10, x, sy + 44, qw, 14, TextAnchor.MiddleLeft, MMuted, FontReg);
             }
         }
 
@@ -2208,16 +2251,17 @@ namespace Oxide.Plugins
             const string R = UiMain;
             Box(c, R, "0.62 0.082 0.188 0.094", CX, CY, CW, 38, 11f);
             Text(c, R, T(id, "MiniBanner"), 12, CX + 14, CY, CW - 28, 38, TextAnchor.MiddleLeft, "0.804 0.741 0.753 1", FontReg);
-            var list = ModesOf("mini");
-            float cw = (CW - 20) / 3f, ch = 200f;
+            LadderStrip(c, R, player, MmLadders[5], CX, CY + 50, CW, 58);
+            var list = ModesOf("mini").Where(m => m.Id != "helimm").ToList();
+            float cw = (CW - 20) / 3f, ch = 190f;
             for (int i = 0; i < list.Count && i < 6; i++)
             {
                 var m = list[i];
-                float x = CX + (i % 3) * (cw + 10), y = CY + 52 + (i / 3) * (ch + 10);
+                float x = CX + (i % 3) * (cw + 10), y = CY + 120 + (i / 3) * (ch + 10);
                 ModeCard(c, R, player, m, x, y, cw, ch - 10);
                 Text(c, R, T(id, "Rules_" + m.Id), 11, x + 16, y + 112, cw - 32, 16, TextAnchor.MiddleLeft, MMuted, FontReg);
             }
-            if (list.Count == 0) Empty(c, R, T(id, "NoModes"), CX, CY + 52, CW, 120);
+            if (list.Count == 0) Empty(c, R, T(id, "NoModes"), CX, CY + 120, CW, 120);
             Text(c, R, T(id, "MiniFoot"), 11, CX, MH - 70, CW, 20, TextAnchor.MiddleLeft, MMuted, FontReg);
         }
 
@@ -2884,6 +2928,15 @@ namespace Oxide.Plugins
             new[] { "AimCap", "Личная тренировка", "Personal training" },
             new[] { "AimTitle", "Чище прицел. Быстрее реакция.", "Cleaner aim. Faster reactions." },
             new[] { "AimSub", "Мишени, боты, зеркало и фейсчеки — с бесконечными патронами.", "Targets, bots, mirror and facechecks — with infinite ammo." },
+            new[] { "MmFind", "Найти матч", "Find match" }, new[] { "MmQueue", "{0} в поиске", "{0} searching" },
+            new[] { "MmTagRanked", "Матчмейкинг · рейтинг", "Matchmaking · ranked" }, new[] { "MmTagHeli", "Матчмейкинг · вертолёты", "Matchmaking · helicopters" }, new[] { "MmTagFc", "Матчмейкинг · 1 на 1", "Matchmaking · 1v1" },
+            new[] { "Mm_ak", "Ранкед: калаши", "Ranked: AK" }, new[] { "MmD_ak", "АК у всех одинаковый · 1v1–5v5", "same AK for all · 1v1–5v5" },
+            new[] { "Mm_mix", "Ранкед: разные ганы", "Ranked: mixed guns" }, new[] { "MmD_mix", "каждый раунд случайная пушка и сет", "random gun and kit each round" },
+            new[] { "Mm_t2", "Ранкед: тир 2", "Ranked: Tier 2" }, new[] { "MmD_t2", "Томпсон, MP5, SAR · роадсайн", "Thompson, MP5, SAR · roadsign" },
+            new[] { "Mm_prim", "Ранкед: примитив", "Ranked: Primitive" }, new[] { "MmD_prim", "лук, арбалет, Eoka, револьвер, копьё", "bow, crossbow, Eoka, revolver, spear" },
+            new[] { "Mm_bow", "Ранкед: луки", "Ranked: Bows" }, new[] { "MmD_bow", "лук и арбалет · шкурный сет", "bow & crossbow · hide set" },
+            new[] { "Mm_heli", "Вертолётный ММ", "Heli MM" }, new[] { "MmD_heli", "атак-хели 1v1 и 2v2, мини с ракетами · до 3 побед", "attack heli 1v1 & 2v2, rocket minis · first to 3" },
+            new[] { "Mm_facecheck", "Фейсчеки 1v1", "Facechecks 1v1" }, new[] { "MmD_facecheck", "против живого игрока · дверь по таймеру · до 7 побед", "vs a real player · timed door · first to 7" },
             new[] { "AimSub2", "Выбери режим — откроется аим-трен с ним. Патроны бесконечные.", "Pick a mode — aim train opens with it. Infinite ammo." },
             new[] { "AimM_targets", "Мишени", "Targets" }, new[] { "AimMD_targets", "стоят на дистанции 10–250 м", "standing at 10–250 m" },
             new[] { "AimM_strafers", "Стрейферы", "Strafers" }, new[] { "AimMD_strafers", "бегают и прыгают", "run and jump" },

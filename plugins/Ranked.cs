@@ -25,7 +25,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Ranked", "Claude", "1.3.0")]
+    [Info("Ranked", "Claude", "1.3.1")]
     [Description("Рейтинговые матчи 1v1–5v5: два ранкеда, MMR, ранги, сезоны, таблица лидеров")]
     public class Ranked : RustPlugin
     {
@@ -1205,6 +1205,7 @@ namespace Oxide.Plugins
                 return;
             }
             if (a.Length > 0 && a[0] == "top") { OpenTop(player); return; }
+            if (a.Length > 0 && Ladders.Contains(a[0])) _ladderPick[Id(player)] = a[0];
             OpenQueue(player);
         }
 
@@ -1815,6 +1816,19 @@ namespace Oxide.Plugins
             if (p.Length < 3) return "ffffff";
             Func<string, string> h = s => Mathf.Clamp(Mathf.RoundToInt(float.Parse(s, System.Globalization.CultureInfo.InvariantCulture) * 255f), 0, 255).ToString("x2");
             return h(p[0]) + h(p[1]) + h(p[2]);
+        }
+
+        // для плашки ММ в меню хаба: лучший ранг лестницы, MMR и сколько в поиске
+        [HookMethod("GetLadderCard")]
+        public Dictionary<string, object> GetLadderCard(ulong id, string ladder)
+        {
+            int best = _config.StartMmr, fmt = 1;
+            foreach (var f in Formats) { var r = R(id, ladder, f); if (r.Matches > 0 && r.Mmr >= best) { best = r.Mmr; fmt = f; } }
+            return new Dictionary<string, object>
+            {
+                ["rank"] = RankLabel(best, id), ["mmr"] = best, ["format"] = fmt, ["color"] = RankOf(best).Color,
+                ["queue"] = _queue.Where(e => e.Ladder == ladder).Sum(e => e.Members.Count),
+            };
         }
 
         [HookMethod("GetLadderMmr")]

@@ -31,7 +31,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Minigames", "Claude", "1.3.0")]
+    [Info("Minigames", "Claude", "1.3.1")]
     [Description("Роум, хели-бои, Bedwars и рейд против рейда")]
     public class Minigames : RustPlugin
     {
@@ -1440,6 +1440,9 @@ namespace Oxide.Plugins
             if (!list.Contains(Id(player))) list.Add(Id(player));
             return list;
         }
+
+        [HookMethod("HeliQueueCount")] public int HeliQueueCount() => _hmQueue.Sum(e => e.Members.Count);
+        [HookMethod("HeliMatchCount")] public int HeliMatchCount() => _hms.Count;
 
         // вызывается из Ranked (кнопка «Искать вертолётный бой») и из меню /mg helimm
         [HookMethod("HeliQueue")]
