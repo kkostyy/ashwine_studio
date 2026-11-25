@@ -50,7 +50,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Hub", "Claude", "1.4.3")]
+    [Info("Hub", "Claude", "1.4.4")]
     [Description("Хаб-сервер: табличка, лобби, режимы, порталы, NPC, инвентарь на режим, монеты, профиль")]
     public class Hub : RustPlugin
     {
@@ -2103,7 +2103,7 @@ namespace Oxide.Plugins
             var id = Id(player);
             const string R = UiMain;
             string tab;
-            Tabs(c, R, id, "arena", new[] { "all", "ffa", "ranked", "duels" }, CX, CY, out tab);
+            Tabs(c, R, id, "arena", new[] { "all", "ffa", "duels" }, CX, CY, out tab);
             float y = CY + 56;
             if (tab == "ranked")
             {
@@ -2201,24 +2201,21 @@ namespace Oxide.Plugins
             Text(c, R, "A / W", 72, CX + CW - 300, CY + 18, 290, 78, TextAnchor.LowerRight, "0.941 0.651 0.694 0.035");
             Text(c, R, T(id, "AimCap").ToUpper(), 11, CX + 22, CY + 14, CW - 44, 16, TextAnchor.MiddleLeft, MPink);
             Text(c, R, T(id, "AimTitle"), 24, CX + 22, CY + 32, CW - 300, 32, TextAnchor.MiddleLeft, MInk);
-            Text(c, R, T(id, "AimSub2"), 12, CX + 22, CY + 66, CW - 300, 18, TextAnchor.MiddleLeft, MMuted, FontReg);
+            Text(c, R, T(id, "AimSub3"), 12, CX + 22, CY + 66, CW - 300, 18, TextAnchor.MiddleLeft, MMuted, FontReg);
             var aimMode = Mode("aim");
             int online = (aimMode != null ? GetModeOnline(aimMode.Id) : 0) + (Mode("facecheck") != null ? GetModeOnline("facecheck") : 0);
             Text(c, R, "● " + T(id, "InGame", online), 12, CX + CW - 240, CY + 14, 218, 18, TextAnchor.MiddleRight, MGreen, FontReg);
 
-            // фейсчеки 1v1 — матчмейкинг: плашка на всю ширину
-            int fcOn = Mode("facecheck") != null ? GetModeOnline("facecheck") : 0;
-            MmStrip(c, R, player, "facecheck", "group", "fc", CX, CY + 106, CW, 58, null, null, -1, fcOn, T(id, "MmTagFc"));
             // плашки режимов 4×2
-            float cw = (CW - 30) / 4f, ch = 128f, y0 = CY + 174;
+            float cw = (CW - 30) / 4f, ch = 150f, y0 = CY + 108;
             for (int i = 0; i < AimCards.Length; i++)
             {
                 var a = AimCards[i];
                 float x = CX + (i % 4) * (cw + 10), y = y0 + (i / 4) * (ch + 10);
                 Panel(c, R, x, y, cw, ch);
                 TileIcon(c, R, a[1], x + 14, y + 14);
-                Text(c, R, T(id, "AimM_" + a[0]), 15, x + 64, y + 14, cw - 78, 22, TextAnchor.MiddleLeft, MInk);
-                Text(c, R, T(id, "AimMD_" + a[0]), 11, x + 14, y + 58, cw - 28, 18, TextAnchor.MiddleLeft, MMuted, FontReg);
+                Text(c, R, T(id, "AimM_" + a[0]), 16, x + 14, y + 60, cw - 28, 22, TextAnchor.MiddleLeft, MInk);
+                Text(c, R, T(id, "AimMD_" + a[0]), 11, x + 14, y + 82, cw - 28, 18, TextAnchor.MiddleLeft, MMuted, FontReg);
                 Pill(c, R, T(id, "PlayBtn"), null, "hub.ui chat " + a[2], "primary", x + 14, y + ch - 42, cw - 28, 30, 12, true);
             }
 
@@ -2251,7 +2248,7 @@ namespace Oxide.Plugins
             var id = Id(player);
             const string R = UiMain;
             var rows = MmLadders.Select(l => new[] { l[0], l[1], l[2] }).Concat(new[] { new[] { "facecheck", "group", "fc" } }).ToArray();
-            float rh = 66f, gap = 8f, y = CY;
+            float rh = 72f, gap = 5f, y = CY - 4;
             float lx = CX + CW - 330;   // колонка лидеров
             for (int i = 0; i < rows.Length; i++, y += rh + gap)
             {
@@ -2262,8 +2259,8 @@ namespace Oxide.Plugins
                 Box(c, R, MWine, CX, y + 9, 4, rh - 18, 2f);
                 Box(c, R, "0.639 0.086 0.184 0.12", lx - 8, y + 1, CX + CW - lx + 7, rh - 2, 13f);
                 TileIcon(c, R, rows[i][1], CX + 16, y + (rh - 40) / 2f);
-                Text(c, R, T(id, "Mm_" + key), 15, CX + 68, y + 12, 260, 20, TextAnchor.MiddleLeft, MInk);
-                Text(c, R, T(id, "MmS_" + key), 10, CX + 68, y + 33, 260, 16, TextAnchor.MiddleLeft, MMuted, FontReg);
+                Text(c, R, T(id, "Mm_" + key), 17, CX + 68, y + 13, 260, 24, TextAnchor.MiddleLeft, MInk);
+                Text(c, R, T(id, "MmS_" + key), 11, CX + 68, y + 38, 260, 18, TextAnchor.MiddleLeft, MMuted, FontReg);
                 // мой ранг и кто в поиске
                 int queue = 0; string myRank = null, myCol = null; int myMmr = -1;
                 if (!fc)
@@ -2271,7 +2268,7 @@ namespace Oxide.Plugins
                     var info = P("Ranked")?.Call("GetLadderCard", id, key) as Dictionary<string, object>;
                     if (info != null) { myRank = info["rank"] as string; myCol = info["color"] as string; myMmr = info["mmr"] is int ? (int)info["mmr"] : 0; queue = info["queue"] is int ? (int)info["queue"] : 0; }
                     if (key == "heli") { var q = P("Minigames")?.Call("HeliQueueCount"); if (q is int) queue = (int)q; }
-                    Text(c, R, myRank ?? T(id, "NoRank"), 12, CX + 330, y + 12, 110, 18, TextAnchor.MiddleLeft, myCol ?? MInk);
+                    Text(c, R, myRank ?? T(id, "NoRank"), 13, CX + 330, y + 12, 110, 18, TextAnchor.MiddleLeft, myCol ?? MInk);
                     Text(c, R, myMmr > 0 ? myMmr + " MMR" : "—", 10, CX + 330, y + 31, 110, 14, TextAnchor.MiddleLeft, MMuted, FontReg);
                 }
                 else
@@ -2279,7 +2276,7 @@ namespace Oxide.Plugins
                     queue = Mode("facecheck") != null ? GetModeOnline("facecheck") : 0;
                     Text(c, R, T(id, "MmNoRating"), 11, CX + 330, y, 110, rh, TextAnchor.MiddleLeft, MMuted, FontReg);
                 }
-                Text(c, R, "● " + queue, 11, CX + 330, y + 46, 110, 14, TextAnchor.MiddleLeft, queue > 0 ? MGreen : MMuted, FontReg);
+                Text(c, R, "● " + T(id, "MmQueue", queue), 10, CX + 330, y + 50, 110, 14, TextAnchor.MiddleLeft, queue > 0 ? MGreen : MMuted, FontReg);
                 Pill(c, R, T(id, "MmFindShort"), null, "hub.ui chat " + rows[i][2], "primary", lx - 126, y + (rh - 32) / 2f, 108, 32, 12, true);
 
                 // лидеры: топ-3 в строку
@@ -2293,11 +2290,11 @@ namespace Oxide.Plugins
                     for (int k = 0; k < top.Count && k < 3; k++)
                     {
                         float cx = lx + 4 + k * cw3;
-                        Box(c, R, "1 1 1 0.04", cx, y + 22, cw3 - 6, 36, 9f);
-                        Text(c, R, (k + 1).ToString(), 13, cx + 6, y + 22, 16, 36, TextAnchor.MiddleCenter, medal[k]);
-                        Text(c, R, Clip(top[k]["name"] as string, 11), 11, cx + 24, y + 24, cw3 - 32, 16, TextAnchor.MiddleLeft, MInk);
+                        Box(c, R, "1 1 1 0.04", cx, y + 22, cw3 - 6, 42, 9f);
+                        Text(c, R, (k + 1).ToString(), 15, cx + 6, y + 22, 16, 42, TextAnchor.MiddleCenter, medal[k]);
+                        Text(c, R, Clip(top[k]["name"] as string, 11), 12, cx + 24, y + 25, cw3 - 32, 18, TextAnchor.MiddleLeft, MInk);
                         string val = fc ? T(id, "MmWins", top[k]["wins"]) : top[k]["mmr"] + " MMR";
-                        Text(c, R, val, 10, cx + 24, y + 40, cw3 - 32, 14, TextAnchor.MiddleLeft, fc ? MMuted : (top[k]["color"] as string ?? MMuted), FontReg);
+                        Text(c, R, val, 10, cx + 24, y + 44, cw3 - 32, 16, TextAnchor.MiddleLeft, fc ? MMuted : (top[k]["color"] as string ?? MMuted), FontReg);
                     }
                 Hit(c, R, fc ? "hub.ui chat fc" : "hub.ui chat top", lx - 8, y, CX + CW - lx + 8, rh);
             }
@@ -2310,17 +2307,16 @@ namespace Oxide.Plugins
             const string R = UiMain;
             Box(c, R, "0.62 0.082 0.188 0.094", CX, CY, CW, 38, 11f);
             Text(c, R, T(id, "MiniBanner"), 12, CX + 14, CY, CW - 28, 38, TextAnchor.MiddleLeft, "0.804 0.741 0.753 1", FontReg);
-            LadderStrip(c, R, player, MmLadders[5], CX, CY + 50, CW, 58);
             var list = ModesOf("mini").Where(m => m.Id != "helimm").ToList();
-            float cw = (CW - 20) / 3f, ch = 190f;
+            float cw = (CW - 20) / 3f, ch = 200f;
             for (int i = 0; i < list.Count && i < 6; i++)
             {
                 var m = list[i];
-                float x = CX + (i % 3) * (cw + 10), y = CY + 120 + (i / 3) * (ch + 10);
+                float x = CX + (i % 3) * (cw + 10), y = CY + 52 + (i / 3) * (ch + 10);
                 ModeCard(c, R, player, m, x, y, cw, ch - 10);
                 Text(c, R, T(id, "Rules_" + m.Id), 11, x + 16, y + 112, cw - 32, 16, TextAnchor.MiddleLeft, MMuted, FontReg);
             }
-            if (list.Count == 0) Empty(c, R, T(id, "NoModes"), CX, CY + 120, CW, 120);
+            if (list.Count == 0) Empty(c, R, T(id, "NoModes"), CX, CY + 52, CW, 120);
             Text(c, R, T(id, "MiniFoot"), 11, CX, MH - 70, CW, 20, TextAnchor.MiddleLeft, MMuted, FontReg);
         }
 
@@ -3003,6 +2999,7 @@ namespace Oxide.Plugins
             new[] { "Mm_bow", "Ранкед: луки", "Ranked: Bows" }, new[] { "MmD_bow", "лук и арбалет · шкурный сет", "bow & crossbow · hide set" },
             new[] { "Mm_heli", "Вертолётный ММ", "Heli MM" }, new[] { "MmD_heli", "атак-хели 1v1 и 2v2, мини с ракетами · до 3 побед", "attack heli 1v1 & 2v2, rocket minis · first to 3" },
             new[] { "Mm_facecheck", "Фейсчеки 1v1", "Facechecks 1v1" }, new[] { "MmD_facecheck", "против живого игрока · дверь по таймеру · до 7 побед", "vs a real player · timed door · first to 7" },
+            new[] { "AimSub3", "Выбери режим — откроется аим-трен с ним. Фейсчеки 1v1 — в разделе «ММ».", "Pick a mode. Facechecks 1v1 are in the MM section." },
             new[] { "AimSub2", "Выбери режим — откроется аим-трен с ним. Патроны бесконечные.", "Pick a mode — aim train opens with it. Infinite ammo." },
             new[] { "AimM_targets", "Мишени", "Targets" }, new[] { "AimMD_targets", "стоят на дистанции 10–250 м", "standing at 10–250 m" },
             new[] { "AimM_strafers", "Стрейферы", "Strafers" }, new[] { "AimMD_strafers", "бегают и прыгают", "run and jump" },
