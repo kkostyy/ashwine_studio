@@ -27,7 +27,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Arenas", "Claude", "1.3.1")]
+    [Info("Arenas", "Claude", "1.3.2")]
     [Description("FFA, TDM, ган-гейм, дуэли и свои арены с экраном смерти, киллфидом и статистикой")]
     public class Arenas : RustPlugin
     {
@@ -1164,6 +1164,7 @@ namespace Oxide.Plugins
                 var p = BasePlayer.FindByID(id);
                 bool w = s.Team.ContainsKey(id) && s.Team[id] == winner;
                 var st = S(id);
+                Hub?.Call("ModeEvent", id, s.IsDuel ? "duels" : "arena_match", w);
                 if (s.IsDuel) { if (w) { st.DuelWins++; Ach(id, "duel_wins"); } else st.DuelLosses++; }
                 else { if (w) st.MatchWins++; else st.MatchLosses++; }
                 if (w)

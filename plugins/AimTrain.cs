@@ -26,7 +26,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("AimTrain", "Claude", "1.4.0")]
+    [Info("AimTrain", "Claude", "1.4.1")]
     [Description("Аим-трен: мишени, стрейферы, стрелки, бот-зеркало; фейсчеки против игрока и бота")]
     public class AimTrain : RustPlugin
     {
@@ -542,6 +542,7 @@ namespace Oxide.Plugins
             if (newReact) st.BestReact = bestR;
             bool newHs = s.BestHsStreak > st.BestHsStreak;
             if (newHs) st.BestHsStreak = s.BestHsStreak;
+            Hub?.Call("ModeEvent", id, "aim_" + s.P.Mode, false);
             if (s.Shots >= 20 && s.P.Mode != "recoil") { st.History.Add(acc); if (st.History.Count > 20) st.History.RemoveAt(0); _dirty = true; }
 
             if (player.IsConnected && !player.IsDead()) player.inventory.Strip();
@@ -1733,6 +1734,7 @@ namespace Oxide.Plugins
             var st = St(id);
             bool rec = score > st.BestRecoil;
             if (rec) { st.BestRecoil = score; _dirty = true; }
+            AchMax(id, "recoil_best", score);
 
             var c = new CuiElementContainer();
             const float W2 = 260f, H = 380f, CX = 130f, CY = 300f, PxM = 160f;     // центр — первый выстрел, 1 м = 160 px

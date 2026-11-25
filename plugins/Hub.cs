@@ -50,7 +50,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Hub", "Claude", "1.5.0")]
+    [Info("Hub", "Claude", "1.5.1")]
     [Description("Хаб-сервер: табличка, лобби, режимы, порталы, NPC, инвентарь на режим, монеты, профиль")]
     public class Hub : RustPlugin
     {
@@ -311,6 +311,8 @@ namespace Oxide.Plugins
             public int HudSize = 1;
             public Dictionary<string, int> Stats = new Dictionary<string, int>();
             public HashSet<string> Achs = new HashSet<string>();
+            // статистика режимов: игр, побед
+            public Dictionary<string, int[]> Games = new Dictionary<string, int[]>();
         }
 
         private MapData _map;
@@ -2372,13 +2374,26 @@ namespace Oxide.Plugins
             Text(c, R, mmr is int && (int)mmr > 0 ? Num((int)mmr) + " MMR" : "", 11, CX + CW - 178, CY + 44, 162, 16, TextAnchor.MiddleRight, MMuted, FontReg);
 
             string tab;
-            Tabs(c, R, id, "profile", new[] { "overview", "achs" }, CX, CY + 100, out tab);
+            Tabs(c, R, id, "profile", new[] { "overview", "achs", "games" }, CX, CY + 100, out tab);
             float y = CY + 154;
+            if (tab == "games") { ProfileGames(c, player, d, y); return; }
             if (tab == "achs")
             {
-                Text(c, R, T(id, "AchOpened", d.Achs.Count, Achs.Count), 12, CX, y, CW - 80, 20, TextAnchor.MiddleLeft, MMuted, FontReg);
-                TagRight(c, R, Mathf.RoundToInt(d.Achs.Count * 100f / Mathf.Max(1, Achs.Count)) + "%", "gold", CX + CW, y);
-                var ordered = Achs.OrderByDescending(a => d.Achs.Contains(a.Key)).ThenByDescending(a => Progress(d, a)).Take(24).ToList();
+                // категории — чипы, общий прогресс справа
+                string cat; if (!_menuTab.TryGetValue(id + ":achcat", out cat)) cat = "all";
+                float cx0 = CX;
+                foreach (var ck in AchCats)
+                {
+                    var label = T(id, "AchCat_" + ck);
+                    float cw0 = TW(label, 11) + 18;
+                    bool on = ck == cat;
+                    BBox(c, R, on ? MWineSoft : "1 1 1 0.03", on ? MRoseLine : "1 1 1 0.05", cx0, y - 2, cw0, 24, 12f);
+                    Text(c, R, label, 11, cx0, y - 2, cw0, 24, TextAnchor.MiddleCenter, on ? "1 1 1 1" : MMuted, FontReg);
+                    Hit(c, R, "hub.ui tab achcat " + ck, cx0, y - 2, cw0, 24);
+                    cx0 += cw0 + 6;
+                }
+                TagRight(c, R, d.Achs.Count + "/" + Achs.Count + " · " + Mathf.RoundToInt(d.Achs.Count * 100f / Mathf.Max(1, Achs.Count)) + "%", "gold", CX + CW, y);
+                var ordered = Achs.Where(a => cat == "all" || AchCat(a) == cat).OrderByDescending(a => d.Achs.Contains(a.Key)).ThenByDescending(a => Progress(d, a)).Take(24).ToList();
                 float aw = (CW - 20) / 3f, ah = 38f;
                 for (int i = 0; i < ordered.Count; i++)
                 {
@@ -2386,6 +2401,7 @@ namespace Oxide.Plugins
                     bool done = d.Achs.Contains(a.Key);
                     float x = CX + (i % 3) * (aw + 10), ay = y + 28 + (i / 3) * (ah + 5);
                     BBox(c, R, done ? "1 1 1 0.03" : "1 1 1 0.012", done ? MLine : "1 1 1 0.04", x, ay, aw, ah, 12f);
+                    if (!done) Bar(c, R, x + 42, ay + ah - 3, aw - 54, 2, Progress(d, a), MWine);
                     Ic(c, R, done ? "cup" : "lock", x + 12, ay + 10, 18, done ? MGold : "0.851 0.737 0.514 0.4");
                     Text(c, R, IsEn(id) ? a.En : a.Ru, 13, x + 42, ay + 2, aw - 110, 18, TextAnchor.MiddleLeft, done ? MInk : "0.937 0.914 0.906 0.45");
                     int v; d.Stats.TryGetValue(a.Stat, out v);
@@ -2431,6 +2447,50 @@ namespace Oxide.Plugins
                 if (!string.IsNullOrEmpty(r)) extra.Add(r);
             }
             Text(c, R, extra.Count == 0 ? T(id, "StatsSoon") : string.Join("\n", extra.ToArray()), 12, rx + 16, y + 42, hw - 32, ph - 54, TextAnchor.UpperLeft, extra.Count == 0 ? MMuted : MInk, FontReg);
+        }
+
+        // ---------- Профиль · Режимы: твои игры и победы по каждому режиму + лидер сервера
+        private void ProfileGames(CuiElementContainer c, BasePlayer player, PData d, float y)
+        {
+            var id = Id(player);
+            const string R = UiMain;
+            var mine = new Dictionary<string, int[]>();
+            foreach (var kv in d.Games ?? new Dictionary<string, int[]>())
+            {
+                var g = EventGroup(kv.Key);
+                int[] v; if (!mine.TryGetValue(g, out v)) mine[g] = v = new int[2];
+                v[0] += kv.Value[0]; v[1] += kv.Value[1];
+            }
+            Panel(c, R, CX, y, CW, MH - 52 - y);
+            float cxs = CX + 16;
+            string[] heads = { T(id, "GmMode"), T(id, "GmTime"), T(id, "GmGames"), T(id, "GmWins"), T(id, "GmRate"), T(id, "GmLeader") };
+            float[] cols = { 0, 230, 330, 420, 510, 600 };
+            for (int i = 0; i < heads.Length; i++) Text(c, R, heads[i].ToUpper(), 10, cxs + cols[i], y + 10, 160, 16, TextAnchor.MiddleLeft, MMuted);
+            var groups = new[] { "ranked", "duels", "aim", "bedwars", "helimm", "heli", "roam", "raidwars" };
+            float ry = y + 32, rh = (MH - 52 - y - 32 - 8) / groups.Length - 4;
+            foreach (var g in groups)
+            {
+                int[] v; mine.TryGetValue(g, out v); if (v == null) v = new int[2];
+                int mins = d.Minutes.Where(kv => EventGroup(kv.Key) == g || kv.Key == g || (g == "ranked" && kv.Key.StartsWith("ranked")) || (g == "aim" && (kv.Key == "aim" || kv.Key == "facecheck"))).Sum(kv => kv.Value);
+                // лидер сервера по победам в этом режиме
+                string lead = "—"; int best = 0;
+                foreach (var pd in _players.Values)
+                {
+                    if (pd.Games == null) continue;
+                    int w = pd.Games.Where(kv => EventGroup(kv.Key) == g).Sum(kv => g == "aim" || g == "roam" ? kv.Value[0] : kv.Value[1]);
+                    if (w > best) { best = w; lead = pd.Name; }
+                }
+                bool noWin = g == "aim" || g == "roam";
+                BBox(c, R, "1 1 1 0.02", "1 1 1 0.04", CX + 8, ry, CW - 16, rh, 10f);
+                Text(c, R, T(id, "Gm_" + g), 13, cxs + cols[0], ry, 220, rh, TextAnchor.MiddleLeft, MInk);
+                Text(c, R, mins >= 60 ? (mins / 60f).ToString("0.#", CultureInfo.InvariantCulture) + " " + T(id, "H") : mins + " " + T(id, "Min"), 12, cxs + cols[1], ry, 90, rh, TextAnchor.MiddleLeft, MMuted, FontReg);
+                Text(c, R, v[0].ToString(), 13, cxs + cols[2], ry, 80, rh, TextAnchor.MiddleLeft, MInk);
+                Text(c, R, noWin ? "—" : v[1].ToString(), 13, cxs + cols[3], ry, 80, rh, TextAnchor.MiddleLeft, MInk);
+                int rate = v[0] > 0 && !noWin ? Mathf.RoundToInt(100f * v[1] / v[0]) : -1;
+                Text(c, R, rate >= 0 ? rate + "%" : "—", 13, cxs + cols[4], ry, 80, rh, TextAnchor.MiddleLeft, rate >= 50 ? MGreen : MInk);
+                Text(c, R, best > 0 ? Clip(lead, 14) + " · " + best : "—", 12, cxs + cols[5], ry, CW - cols[5] - 40, rh, TextAnchor.MiddleLeft, best > 0 ? MGold : MMuted, FontReg);
+                ry += rh + 4;
+            }
         }
 
         // ---------- Группа (команда Rust из Social)
@@ -2609,12 +2669,37 @@ namespace Oxide.Plugins
             new AchDef("bp_5", "bp_saved", 5, 100, "Архитектор", "Architect", "Сохрани 5 чертежей", "Save 5 blueprints", "Архитектор"),
             new AchDef("time_10h", "play_minutes", 600, 100, "Завсегдатай", "Regular", "10 часов на сервере", "10 hours online"),
             new AchDef("modes_8", "modes_played", 8, 150, "Всё попробовал", "Tried it all", "Сыграй в 8 разных режимов", "Play 8 different modes"),
+            new AchDef("helimm_5", "helimm_wins", 5, 200, "Ас", "Ace", "5 побед в вертолётном ММ", "Win 5 heli MM matches", "Ас"),
+            new AchDef("recoil_80", "recoil_best", 80, 150, "Железная рука", "Iron hand", "Контроль отдачи 80/100", "Recoil control 80/100"),
         };
+
+        private static readonly string[] AchCats = { "all", "arena", "ranked", "aim", "mini", "tour", "build", "other" };
+        private static string AchCat(AchDef a) =>
+            a.Stat.StartsWith("arena") || a.Stat.StartsWith("duel") || a.Stat.StartsWith("gungame") ? "arena"
+            : a.Stat.StartsWith("ranked") ? "ranked" : a.Stat.StartsWith("fc") || a.Stat.StartsWith("aim") || a.Stat.StartsWith("recoil") ? "aim"
+            : a.Stat.StartsWith("roam") || a.Stat.StartsWith("heli") || a.Stat.StartsWith("bedwars") || a.Stat.StartsWith("raidwars") ? "mini"
+            : a.Stat.Contains("tour") ? "tour" : a.Stat.StartsWith("build") || a.Stat.StartsWith("bp") ? "build" : "other";
 
         private static readonly float[] HudScales = { 0.65f, 0.8f, 1f };
 
         [HookMethod("GetHudScale")]
         public float GetHudScale(ulong id) => HudScales[Mathf.Clamp(D(id).HudSize, 0, 2)];
+
+        // событие режима: матч сыгран (и выигран ли) — для статистики режимов в профиле
+        [HookMethod("ModeEvent")]
+        public void ModeEvent(ulong id, string mode, bool win)
+        {
+            if (id == 0UL || string.IsNullOrEmpty(mode)) return;
+            var d = D(id);
+            if (d.Games == null) d.Games = new Dictionary<string, int[]>();
+            int[] v;
+            if (!d.Games.TryGetValue(mode, out v)) d.Games[mode] = v = new int[2];
+            v[0]++; if (win) v[1]++;
+            _dirty = true;
+        }
+
+        private static string EventGroup(string mode) =>
+            mode.StartsWith("ranked_") ? "ranked" : mode.StartsWith("aim_") ? "aim" : mode == "duels" || mode == "arena_match" ? "duels" : mode;
 
         [HookMethod("AchAdd")]
         public void AchAdd(ulong id, string stat, int amount)
@@ -2916,7 +3001,15 @@ namespace Oxide.Plugins
             new[] { "Tab_ranked", "Ранкед", "Ranked" },
             new[] { "Tab_duels", "Дуэли", "Duels" },
             new[] { "Tab_overview", "Обзор", "Overview" },
-            new[] { "Tab_achs", "Достижения", "Achievements" },
+            new[] { "Tab_achs", "Достижения", "Achievements" }, new[] { "Tab_games", "Режимы", "Modes" },
+            new[] { "AchCat_all", "Все", "All" }, new[] { "AchCat_arena", "Арены", "Arenas" }, new[] { "AchCat_ranked", "Ранкед", "Ranked" },
+            new[] { "AchCat_aim", "Аим", "Aim" }, new[] { "AchCat_mini", "Мини-игры", "Minigames" }, new[] { "AchCat_tour", "Турниры", "Tournaments" },
+            new[] { "AchCat_build", "Стройка", "Build" }, new[] { "AchCat_other", "Разное", "Other" },
+            new[] { "GmMode", "Режим", "Mode" }, new[] { "GmTime", "Время", "Time" }, new[] { "GmGames", "Игр", "Games" }, new[] { "GmWins", "Побед", "Wins" },
+            new[] { "GmRate", "Винрейт", "Winrate" }, new[] { "GmLeader", "Лидер сервера", "Server leader" }, new[] { "Min", "мин", "min" },
+            new[] { "Gm_ranked", "Ранкед", "Ranked" }, new[] { "Gm_duels", "Дуэли и свои арены", "Duels & custom arenas" }, new[] { "Gm_aim", "Аим-трен (сессий)", "Aim train (sessions)" },
+            new[] { "Gm_bedwars", "Bedwars", "Bedwars" }, new[] { "Gm_helimm", "Вертолётный ММ", "Heli MM" }, new[] { "Gm_heli", "Хели-бои", "Heli fights" },
+            new[] { "Gm_roam", "Роум", "Roam" }, new[] { "Gm_raidwars", "Рейд против рейда", "Raid wars" },
             new[] { "CardSub_film", "Боты, камеры и постановки", "Bots, cameras and scenes" },
             new[] { "CardSub_arena", "FFA, дуэли и ранкед", "FFA, duels and ranked" },
             new[] { "CardSub_aim", "Мишени, боты, фейсчеки", "Targets, bots, facechecks" },

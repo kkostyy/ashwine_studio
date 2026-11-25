@@ -31,7 +31,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Minigames", "Claude", "1.3.1")]
+    [Info("Minigames", "Claude", "1.3.2")]
     [Description("Роум, хели-бои, Bedwars и рейд против рейда")]
     public class Minigames : RustPlugin
     {
@@ -935,6 +935,7 @@ namespace Oxide.Plugins
             {
                 var p = BasePlayer.FindByID(id);
                 bool won = winner >= 0 && g.Team.ContainsKey(id) && g.Team[id] == winner;
+                Hub?.Call("ModeEvent", id, g.Type, won);
                 if (won)
                 {
                     Dictionary<string, int> w;
@@ -1686,6 +1687,7 @@ namespace Oxide.Plugins
                 _hmIn.Remove(id);
                 int t = m.TeamOf(id);
                 bool win = t == winner;
+                if (winner >= 0) { Hub?.Call("ModeEvent", id, "helimm", win); if (win) Ach(id, "helimm_wins"); }
                 if (win && winner >= 0)
                 {
                     W(id, "heli");

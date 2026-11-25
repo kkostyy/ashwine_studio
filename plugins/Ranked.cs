@@ -25,7 +25,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Ranked", "Claude", "1.3.3")]
+    [Info("Ranked", "Claude", "1.3.4")]
     [Description("Рейтинговые матчи 1v1–5v5: два ранкеда, MMR, ранги, сезоны, таблица лидеров")]
     public class Ranked : RustPlugin
     {
@@ -857,6 +857,7 @@ namespace Oxide.Plugins
                 r.Matches++;
                 if (win) r.Wins++; else r.Losses++;
                 if (win) Ach(id, "ranked_wins");
+                Hub?.Call("ModeEvent", id, "ranked_" + m.Ladder, win);
                 deltas[id] = delta;
                 var d = D(id);
                 int ki, de, hs;
