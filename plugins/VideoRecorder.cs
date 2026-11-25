@@ -32,7 +32,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("VideoRecorder", "Claude", "3.5.0")]
+    [Info("VideoRecorder", "Claude", "3.6.0")]
     [Description("Студия постановок: запись движений, повтор ботами, кинокамера, эффекты и монтаж")]
     public class VideoRecorder : RustPlugin
     {
@@ -304,6 +304,7 @@ namespace Oxide.Plugins
         {
             public float t;
             public float x, y, z, p, w;
+            public int e;                                // кривая скорости до следующей точки: 0 авто, 1 линейно, 2 разгон, 3 торможение, 4 разгон+торможение
         }
 
         private class CameraSettings
@@ -315,6 +316,7 @@ namespace Oxide.Plugins
             public float OrbitSpeed = 20f;
             public bool FreeLook;
             public float Smooth = 0.7f;                  // 0 — линейно, 1 — максимально плавный сплайн
+            public int Focus = -1;                       // путь: камера всё время смотрит на этого бота (-1 — нет)
             public List<CamKey> Keys = new List<CamKey>();
         }
 
@@ -2228,6 +2230,30 @@ namespace Oxide.Plugins
             return new Vector3(pitch, yaw, 0f);
         }
 
+        // кривые скорости камеры между точками пути
+        private static float EaseK(int e, float k)
+        {
+            switch (e)
+            {
+                case 1: return k;
+                case 2: return k * k * k;
+                case 3: { float u = 1f - k; return 1f - u * u * u; }
+                case 4: return k < 0.5f ? 4f * k * k * k : 1f - Mathf.Pow(-2f * k + 2f, 3f) / 2f;
+                default: return k;
+            }
+        }
+
+        private static readonly string[] CamEases = { "Ease0", "Ease1", "Ease2", "Ease3", "Ease4" };
+
+        // фокус на цели: путь задаёт позицию, взгляд — на глаза выбранного бота
+        private void FocusAngles(ulong owner, CameraSettings cam, Vector3 pos, ref Vector3 ang)
+        {
+            if (cam.Focus < 0) return;
+            var bot = FindBot(owner, cam.Focus);
+            if (bot == null) return;
+            ang = LookAngles(pos, bot.eyes.position);
+        }
+
         private static Vector3 CatmullRom(Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3, float t)
         {
             float t2 = t * t, t3 = t2 * t;
@@ -2263,6 +2289,7 @@ namespace Oxide.Plugins
                     var k0 = keys[0];
                     pos = new Vector3(k0.x, k0.y, k0.z);
                     ang = new Vector3(k0.p, k0.w, 0f);
+                    FocusAngles(owner, cam, pos, ref ang);
                     return true;
                 }
                 if (t >= keys[keys.Count - 1].t)
@@ -2270,6 +2297,7 @@ namespace Oxide.Plugins
                     var kl = keys[keys.Count - 1];
                     pos = new Vector3(kl.x, kl.y, kl.z);
                     ang = new Vector3(kl.p, kl.w, 0f);
+                    FocusAngles(owner, cam, pos, ref ang);
                     return true;
                 }
                 int i = 0;
@@ -2281,9 +2309,11 @@ namespace Oxide.Plugins
                 float k = Mathf.Clamp01((t - a.t) / Mathf.Max(0.001f, b.t - a.t));
                 float sm = Mathf.Clamp01(cam.Smooth);
                 float s = Mathf.Lerp(k, k * k * (3f - 2f * k), sm);
+                if (a.e > 0) { k = EaseK(a.e, k); s = k; }
                 var lin = Vector3.Lerp(new Vector3(a.x, a.y, a.z), new Vector3(b.x, b.y, b.z), k);
                 pos = Vector3.Lerp(lin, CatmullRom(new Vector3(pa.x, pa.y, pa.z), new Vector3(a.x, a.y, a.z), new Vector3(b.x, b.y, b.z), new Vector3(pn.x, pn.y, pn.z), k), sm);
                 ang = new Vector3(Mathf.Lerp(a.p, b.p, s), Mathf.LerpAngle(a.w, b.w, s), 0f);
+                FocusAngles(owner, cam, pos, ref ang);
                 return true;
             }
 
@@ -3864,6 +3894,12 @@ namespace Oxide.Plugins
                 case "cam.del":
                     if (idx >= 0 && idx < cam.Keys.Count) cam.Keys.RemoveAt(idx);
                     break;
+                case "cam.ease":
+                    if (idx >= 0 && idx < cam.Keys.Count) cam.Keys[idx].e = (cam.Keys[idx].e + 1) % CamEases.Length;
+                    break;
+                case "cam.focus":
+                    cam.Focus = scene.Takes.Count == 0 ? -1 : cam.Focus + 1 >= scene.Takes.Count ? -1 : cam.Focus + 1;
+                    break;
                 case "cam.kt":
                     if (idx >= 0 && idx < cam.Keys.Count)
                     {
@@ -5073,6 +5109,15 @@ namespace Oxide.Plugins
             if (mode == 0)
             {
                 Cap(c, P, T(id, "CamKeysCap", cam.Keys.Count), 17, 376);
+                // фокус на цели — чип, клик листает ботов
+                string fname = cam.Focus >= 0 && cam.Focus < scene.Takes.Count ? (cam.Focus + 1) + ". " + scene.Takes[cam.Focus].Name : T(id, "FocusNone");
+                string ftxt = T(id, "CamFocus", Clip(fname, 14));
+                float fw = TextW(ftxt, 11) + 34;
+                bool fon = cam.Focus >= 0;
+                BBox(c, P, fon ? "0.639 0.086 0.184 0.22" : CSurf, fon ? "0.941 0.651 0.694 0.45" : CLine, 352 - fw, 370, fw, 24, 12f);
+                Ic(c, P, "crosshair", 360 - fw, 376, 12, fon ? CWhite : CDim);
+                Tx(c, P, ftxt, 11, 378 - fw, 370, fw - 30, 24, TextAnchor.MiddleLeft, fon ? CWhite : CDim);
+                Hit(c, P, "vr.ui cam.focus", 352 - fw, 370, fw, 24);
                 Tx(c, P, T(id, "Clear"), 12, 300, 375, 123, 14, TextAnchor.MiddleRight, CRose);
                 Hit(c, P, "vr.ui cam.clear", 360, 370, 63, 24);
                 int first = Mathf.Max(0, Mathf.Min(cam.Keys.Count - 3, curKey - 1));
@@ -5084,8 +5129,12 @@ namespace Oxide.Plugins
                     bool cur = i == curKey;
                     BBox(c, P, cur ? CHi : CSurf, cur ? CHiLine : CLine, 17, y, 406, 42, 12f);
                     Ic(c, P, "tridown", 28, y + 16, 10, CWhite);
-                    Tx(c, P, $"CAM {i + 1}", 13, 46, y, 46, 42);
-                    Tx(c, P, Time3(k.t), 13, 92, y, 54, 42, TextAnchor.MiddleLeft, CText, false);
+                    Tx(c, P, $"CAM {i + 1}", 13, 46, y + 2, 46, 22);
+                    Tx(c, P, Time3(k.t), 13, 92, y + 2, 54, 22, TextAnchor.MiddleLeft, CText, false);
+                    // кривая скорости до следующей точки — клик меняет
+                    bool last = i == cam.Keys.Count - 1;
+                    Tx(c, P, last ? "—" : "› " + T(id, CamEases[Mathf.Clamp(k.e, 0, CamEases.Length - 1)]), 10, 46, y + 22, 100, 16, TextAnchor.MiddleLeft, last ? CDim : k.e > 0 ? CRose : CDim, false);
+                    if (!last) Hit(c, P, $"vr.ui cam.ease {i}", 40, y + 20, 106, 20);
                     string[] lbl = { "−1", "−0.1", "+0.1", "+1" };
                     string[] dv = { "-1", "-0.1", "0.1", "1" };
                     float[] bx = { 147, 190, 243, 295 };
@@ -5909,6 +5958,9 @@ namespace Oxide.Plugins
             new[] { "CamAddHere", "Добавить точку отсюда · {0}", "Add point from here · {0}" },
             new[] { "CamFollowCap", "Цель камеры", "Camera target" },
             new[] { "CamKeysCap", "Точки пути · {0}", "Path points · {0}" },
+            new[] { "Ease0", "авто", "auto" }, new[] { "Ease1", "линейно", "linear" }, new[] { "Ease2", "разгон", "ease in" },
+            new[] { "Ease3", "торможение", "ease out" }, new[] { "Ease4", "разгон+торм.", "in-out" },
+            new[] { "CamFocus", "Фокус: {0}", "Focus: {0}" }, new[] { "FocusNone", "нет", "none" },
             new[] { "CamKeysEmpty", "Точек пока нет. Встань, куда смотрит камера, и добавь первую.", "No points yet. Stand where the camera should look and add one." },
             new[] { "CamTargetNext", "Следующий дубль", "Next take" },
             new[] { "CopyBinds", "Скопировать бинды", "Copy binds" },
@@ -5993,7 +6045,7 @@ namespace Oxide.Plugins
             new[] { "WholeSceneCap", "Вся сцена · вокруг тебя", "Whole scene · around you" },
             new[] { "WhoseLook", "Чья внешность", "Whose look" },
             new[] { "Writing", "пишут:", "recording:" },
-            new[] { "LangVer", "3.5.0", "3.5.0" },
+            new[] { "LangVer", "3.6.0", "3.6.0" },
             // --- сообщения в чат
             new[] { "NoAccess", "Нет доступа (нужно право videorecorder.use).", "No access (videorecorder.use permission required)." },
             new[] { "HostLeft", "Владелец сцены вышел — ты снова в своей студии.", "The scene owner left — you are back in your own studio." },
