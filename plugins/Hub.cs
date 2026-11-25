@@ -50,7 +50,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Hub", "Claude", "1.4.2")]
+    [Info("Hub", "Claude", "1.4.3")]
     [Description("Хаб-сервер: табличка, лобби, режимы, порталы, NPC, инвентарь на режим, монеты, профиль")]
     public class Hub : RustPlugin
     {
@@ -1594,7 +1594,7 @@ namespace Oxide.Plugins
         private static readonly string[][] MenuPages =
         {
             new[] { "home", "home" }, new[] { "build", "build" }, new[] { "film", "film" }, new[] { "arena", "arena" },
-            new[] { "aim", "aim" }, new[] { "mini", "mini" }, new[] { "shop", "shop" }, new[] { "profile", "profile" },
+            new[] { "aim", "aim" }, new[] { "mini", "mini" }, new[] { "mm", "cup" }, new[] { "shop", "shop" }, new[] { "profile", "profile" },
             new[] { "group", "group" }, new[] { "settings", "settings" },
         };
 
@@ -1817,7 +1817,7 @@ namespace Oxide.Plugins
             float ny = 82f;
             for (int i = 0; i < MenuPages.Length - 1; i++)
             {
-                if (i == 6) { Box(c, R, MLine, 22, ny + 4, SideW - 44, 1, 0f); ny += 12f; }
+                if (i == 7) { Box(c, R, MLine, 22, ny + 4, SideW - 44, 1, 0f); ny += 12f; }
                 NavItem(c, R, id, MenuPages[i][0], MenuPages[i][1], page, ny);
                 ny += 44f;
             }
@@ -1854,6 +1854,7 @@ namespace Oxide.Plugins
                 case "arena": PageArena(c, player); break;
                 case "aim": PageAim(c, player); break;
                 case "mini": PageMini(c, player); break;
+                case "mm": PageMm(c, player); break;
                 case "shop": PageShop(c, player, d); break;
                 case "profile": PageProfile(c, player, d); break;
                 case "group": PageGroup(c, player); break;
@@ -2241,6 +2242,64 @@ namespace Oxide.Plugins
                 float x = CX + 16 + i * (qw + 10);
                 Text(c, R, cells[i][1], 18, x, sy + 22, qw, 22, TextAnchor.MiddleLeft, i == 0 ? MGold : MInk);
                 Text(c, R, cells[i][0], 10, x, sy + 44, qw, 14, TextAnchor.MiddleLeft, MMuted, FontReg);
+            }
+        }
+
+        // ---------- ММ: все матчмейкинги сверху вниз, справа у каждого — лидеры
+        private void PageMm(CuiElementContainer c, BasePlayer player)
+        {
+            var id = Id(player);
+            const string R = UiMain;
+            var rows = MmLadders.Select(l => new[] { l[0], l[1], l[2] }).Concat(new[] { new[] { "facecheck", "group", "fc" } }).ToArray();
+            float rh = 66f, gap = 8f, y = CY;
+            float lx = CX + CW - 330;   // колонка лидеров
+            for (int i = 0; i < rows.Length; i++, y += rh + gap)
+            {
+                var key = rows[i][0];
+                bool fc = key == "facecheck";
+                // корпус в стиле плашки ММ
+                BBox(c, R, "0.11 0.06 0.07 1", "0.941 0.651 0.694 0.22", CX, y, CW, rh, 14f);
+                Box(c, R, MWine, CX, y + 9, 4, rh - 18, 2f);
+                Box(c, R, "0.639 0.086 0.184 0.12", lx - 8, y + 1, CX + CW - lx + 7, rh - 2, 13f);
+                TileIcon(c, R, rows[i][1], CX + 16, y + (rh - 40) / 2f);
+                Text(c, R, T(id, "Mm_" + key), 15, CX + 68, y + 12, 260, 20, TextAnchor.MiddleLeft, MInk);
+                Text(c, R, T(id, "MmS_" + key), 10, CX + 68, y + 33, 260, 16, TextAnchor.MiddleLeft, MMuted, FontReg);
+                // мой ранг и кто в поиске
+                int queue = 0; string myRank = null, myCol = null; int myMmr = -1;
+                if (!fc)
+                {
+                    var info = P("Ranked")?.Call("GetLadderCard", id, key) as Dictionary<string, object>;
+                    if (info != null) { myRank = info["rank"] as string; myCol = info["color"] as string; myMmr = info["mmr"] is int ? (int)info["mmr"] : 0; queue = info["queue"] is int ? (int)info["queue"] : 0; }
+                    if (key == "heli") { var q = P("Minigames")?.Call("HeliQueueCount"); if (q is int) queue = (int)q; }
+                    Text(c, R, myRank ?? T(id, "NoRank"), 12, CX + 330, y + 12, 110, 18, TextAnchor.MiddleLeft, myCol ?? MInk);
+                    Text(c, R, myMmr > 0 ? myMmr + " MMR" : "—", 10, CX + 330, y + 31, 110, 14, TextAnchor.MiddleLeft, MMuted, FontReg);
+                }
+                else
+                {
+                    queue = Mode("facecheck") != null ? GetModeOnline("facecheck") : 0;
+                    Text(c, R, T(id, "MmNoRating"), 11, CX + 330, y, 110, rh, TextAnchor.MiddleLeft, MMuted, FontReg);
+                }
+                Text(c, R, "● " + queue, 11, CX + 330, y + 46, 110, 14, TextAnchor.MiddleLeft, queue > 0 ? MGreen : MMuted, FontReg);
+                Pill(c, R, T(id, "MmFindShort"), null, "hub.ui chat " + rows[i][2], "primary", lx - 126, y + (rh - 32) / 2f, 108, 32, 12, true);
+
+                // лидеры: топ-3 в строку
+                Text(c, R, T(id, "MmLeaders").ToUpper(), 9, lx + 6, y + 6, 200, 12, TextAnchor.MiddleLeft, MPink);
+                var top = fc ? P("AimTrain")?.Call("GetFcTop", 3) as List<Dictionary<string, object>>
+                             : P("Ranked")?.Call("GetLadderTop", key, 3) as List<Dictionary<string, object>>;
+                float cw3 = (CX + CW - lx - 16) / 3f;
+                string[] medal = { MGold, "0.80 0.80 0.84 1", "0.80 0.55 0.38 1" };
+                if (top == null || top.Count == 0) Text(c, R, T(id, "MmNoLeaders"), 11, lx + 6, y + 20, CX + CW - lx - 12, rh - 24, TextAnchor.MiddleLeft, MMuted, FontReg);
+                else
+                    for (int k = 0; k < top.Count && k < 3; k++)
+                    {
+                        float cx = lx + 4 + k * cw3;
+                        Box(c, R, "1 1 1 0.04", cx, y + 22, cw3 - 6, 36, 9f);
+                        Text(c, R, (k + 1).ToString(), 13, cx + 6, y + 22, 16, 36, TextAnchor.MiddleCenter, medal[k]);
+                        Text(c, R, Clip(top[k]["name"] as string, 11), 11, cx + 24, y + 24, cw3 - 32, 16, TextAnchor.MiddleLeft, MInk);
+                        string val = fc ? T(id, "MmWins", top[k]["wins"]) : top[k]["mmr"] + " MMR";
+                        Text(c, R, val, 10, cx + 24, y + 40, cw3 - 32, 14, TextAnchor.MiddleLeft, fc ? MMuted : (top[k]["color"] as string ?? MMuted), FontReg);
+                    }
+                Hit(c, R, fc ? "hub.ui chat fc" : "hub.ui chat top", lx - 8, y, CX + CW - lx + 8, rh);
             }
         }
 
@@ -2835,6 +2894,13 @@ namespace Oxide.Plugins
             new[] { "Page_arena", "Арены", "Arenas" },
             new[] { "Page_aim", "Аим-трен", "Aim train" },
             new[] { "Page_mini", "Мини-игры", "Minigames" },
+            new[] { "Page_mm", "ММ", "Matchmaking" }, new[] { "PageSub_mm", "Все матчмейкинги и лидеры", "All matchmaking and leaders" },
+            new[] { "MmS_ak", "одинаковый АК · 1v1–5v5", "same AK · 1v1–5v5" }, new[] { "MmS_mix", "случайная пушка каждый раунд", "random gun every round" },
+            new[] { "MmS_t2", "Томпсон, MP5, SAR", "Thompson, MP5, SAR" }, new[] { "MmS_prim", "лук, Eoka, револьвер, копьё", "bow, Eoka, revolver, spear" },
+            new[] { "MmS_bow", "лук и арбалет", "bow & crossbow" }, new[] { "MmS_heli", "атак-хели и мини · до 3 побед", "attack heli & mini · first to 3" },
+            new[] { "MmS_facecheck", "против игрока · до 7 побед", "vs a player · first to 7" },
+            new[] { "MmLeaders", "Лидеры", "Leaders" }, new[] { "MmNoLeaders", "пока никто не играл — будь первым", "no one yet — be the first" },
+            new[] { "MmWins", "{0} побед", "{0} wins" }, new[] { "MmFindShort", "Найти", "Find" }, new[] { "MmNoRating", "без рейтинга", "unrated" },
             new[] { "Page_shop", "Магазин", "Shop" },
             new[] { "Page_profile", "Профиль", "Profile" },
             new[] { "Page_group", "Группа", "Group" },

@@ -26,7 +26,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("AimTrain", "Claude", "1.3.1")]
+    [Info("AimTrain", "Claude", "1.3.2")]
     [Description("Аим-трен: мишени, стрейферы, стрелки, бот-зеркало; фейсчеки против игрока и бота")]
     public class AimTrain : RustPlugin
     {
@@ -1222,6 +1222,11 @@ namespace Oxide.Plugins
         #endregion
 
         #region Команды
+
+        // топ фейсчеков 1v1 для меню хаба
+        [HookMethod("GetFcTop")]
+        public List<Dictionary<string, object>> GetFcTop(int n) => _stats.Values.Where(x => x.FcWins > 0).OrderByDescending(x => x.FcWins).Take(Mathf.Max(1, n))
+            .Select(x => new Dictionary<string, object> { ["name"] = x.Name ?? "?", ["wins"] = x.FcWins }).ToList();
 
         [ChatCommand("aim")]
         private void CmdAim(BasePlayer player, string c, string[] a)

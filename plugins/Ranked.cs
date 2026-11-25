@@ -25,7 +25,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("Ranked", "Claude", "1.3.1")]
+    [Info("Ranked", "Claude", "1.3.2")]
     [Description("Рейтинговые матчи 1v1–5v5: два ранкеда, MMR, ранги, сезоны, таблица лидеров")]
     public class Ranked : RustPlugin
     {
@@ -1829,6 +1829,21 @@ namespace Oxide.Plugins
                 ["rank"] = RankLabel(best, id), ["mmr"] = best, ["format"] = fmt, ["color"] = RankOf(best).Color,
                 ["queue"] = _queue.Where(e => e.Ladder == ladder).Sum(e => e.Members.Count),
             };
+        }
+
+        // топ лестницы для меню хаба: лучший MMR игрока по всем форматам
+        [HookMethod("GetLadderTop")]
+        public List<Dictionary<string, object>> GetLadderTop(string ladder, int n)
+        {
+            var rows = new List<KeyValuePair<PData, int>>();
+            foreach (var d in _data.Players.Values)
+            {
+                int best = -1;
+                foreach (var f in Formats) { Rating r; if (d.R != null && d.R.TryGetValue(Key(ladder, f), out r) && r.Matches > 0) best = Mathf.Max(best, r.Mmr); }
+                if (best >= 0) rows.Add(new KeyValuePair<PData, int>(d, best));
+            }
+            return rows.OrderByDescending(x => x.Value).Take(Mathf.Max(1, n))
+                .Select(x => new Dictionary<string, object> { ["name"] = x.Key.Name ?? "?", ["mmr"] = x.Value, ["color"] = RankOf(x.Value).Color }).ToList();
         }
 
         [HookMethod("GetLadderMmr")]
