@@ -90,3 +90,24 @@ oxide.revoke group default videorecorder.use
 
 ## 6. Подключение из игры
 F1 → `client.connect localhost:28015` (с другого ПК — твой IP; порты 28015/28017 UDP открыть в роутере).
+
+## 7. Готовые плагины с umod (план 1.4)
+Запусти `get-umod.bat` — скачает CopyPaste, ZoneManager, Spawns + CustomSpawnPoints, ImageLibrary, SignArtist,
+AdminRadar, Vanish, PlayerAdministration, Telekinesis (вместо Entity Editor — на umod такого нет).
+Права админам:
+```
+oxide.grant group admin adminradar.allowed
+oxide.grant group admin vanish.allow
+oxide.grant group admin playeradministration.access.show
+oxide.grant group admin telekinesis.use
+oxide.grant group admin signartist.url
+oxide.grant group admin zonemanager.zone
+```
+Точки появления: `/spawns new` → `/spawns add` (в нужных местах) → `/spawns save lobby` → в консоли `spawns.config lobby`.
+
+## 8. Новое 1.4 (своё)
+/npc                — NPC там, куда смотришь (в твоей одежде и с оружием в руке); /npc kit <набор>, /npc remove, /npc list
+/emote или кнопка в меню P → Профиль · Жесты — жесты и танцы (часть продаётся в /shop)
+/replay             — записи последних матчей ранкеда и арен, просмотр «призраками»
+/aim recoil         — тренажёр отдачи
+Окно после смерти (Combat Log) включается само: урон по тебе за последние 10 с.

@@ -9,6 +9,16 @@ plugins_backup_*/
 plugins/Skinner.cs
 plugins/AdminESP.cs
 plugins/GlowingEyes.cs
+plugins/CopyPaste.cs
+plugins/ZoneManager.cs
+plugins/Spawns.cs
+plugins/CustomSpawnPoints.cs
+plugins/ImageLibrary.cs
+plugins/SignArtist.cs
+plugins/AdminRadar.cs
+plugins/Vanish.cs
+plugins/PlayerAdministration.cs
+plugins/Telekinesis.cs
 
 # локальные настройки и секреты
 .env
